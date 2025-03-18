@@ -1,0 +1,6 @@
+aiogram==2.20
+python-dotenv==0.20.0
+motor==2.5.1
+pymongo[srv]==3.12.3
+apscheduler==3.9.1
+python-dateutil==2.8.2
