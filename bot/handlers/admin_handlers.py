@@ -9,6 +9,7 @@ from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.dispatcher.filters import Text, IDFilter
+import pytz
 
 from bot.config.config import ADMIN_USER_IDS
 from bot.database import (
@@ -38,7 +39,6 @@ class InviteLinkStates(StatesGroup):
     waiting_for_source = State()
     waiting_for_description = State()
     waiting_for_expire_date = State()
-    waiting_for_member_limit = State()
 
 async def admin_start(message: types.Message):
     """
@@ -124,7 +124,7 @@ async def process_invite_link_description(message: types.Message, state: FSMCont
 
 async def process_invite_link_expire_date(message: types.Message, state: FSMContext):
     """
-    Обрабатывает ввод срока действия для пригласительной ссылки
+    Обрабатывает ввод срока действия для пригласительной ссылки и генерирует ссылку
     """
     try:
         days = int(message.text)
@@ -135,40 +135,13 @@ async def process_invite_link_expire_date(message: types.Message, state: FSMCont
             else:
                 data["expire_date"] = None
         
-        await message.answer(
-            "Введите ограничение на количество использований ссылки (или отправьте '0', если ограничения нет):"
-        )
-        await InviteLinkStates.waiting_for_member_limit.set()
-    
-    except ValueError:
-        await message.answer("Пожалуйста, введите число. Попробуйте еще раз:")
-
-async def process_invite_link_member_limit(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает ввод ограничения на количество использований ссылки
-    """
-    try:
-        member_limit = int(message.text)
-        
-        async with state.proxy() as data:
-            if member_limit <= 0:
-                data["member_limit"] = None
-            else:
-                data["member_limit"] = member_limit
-        
-        # Для ссылок, требующих одобрения администратора, нельзя установить ограничение на количество участников
-        if member_limit > 0:
-            await message.answer("⚠️ Примечание: Ограничение на количество участников не может быть применено "
-                              "для ссылок, требующих одобрения администратора. "
-                              "Ссылка будет создана без ограничения по количеству.")
-        
-        # Генерируем ссылку
+        # Генерируем ссылку без ограничения по количеству использований
         link_data = await generate_invite_link(
             bot=message.bot,
             source=data["source"],
             created_by=message.from_user.id,
             expire_date=data.get("expire_date"),
-            member_limit=data.get("member_limit"),
+            member_limit=None,
             description=data.get("description")
         )
         
@@ -182,9 +155,6 @@ async def process_invite_link_member_limit(message: types.Message, state: FSMCon
         
         if link_data.get("expires_at"):
             text += f"Истекает: {link_data['expires_at']}\n"
-        
-        # Не показываем лимит использований, так как он не применяется
-        # для ссылок, требующих одобрения администратора
         
         await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
         await state.finish()
@@ -387,7 +357,8 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
         logging.info(f"Найдено {len(users)} активных пользователей для запланированной рассылки с фильтром: {target_filter}")
     
     await callback_query.message.answer(
-        "Введите время отправки рассылки в формате 'ДД.ММ.ГГГГ ЧЧ:ММ', например: 31.12.2023 15:30"
+        "Введите время отправки рассылки в формате 'ДД.ММ.ГГГГ ЧЧ:ММ' (по Московскому времени), например: 31.12.2023 15:30.\n\n"
+        "Внимание: время должно быть указано именно в московском часовом поясе (МСК, UTC+3)."
     )
     await BroadcastStates.waiting_for_schedule_time.set()
 
@@ -399,9 +370,14 @@ async def process_schedule_time(message: types.Message, state: FSMContext):
         # Парсим дату и время из сообщения
         schedule_time = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
         
-        # Проверяем, что дата в будущем
-        if schedule_time <= datetime.now():
-            await message.answer("Пожалуйста, укажите дату и время в будущем. Попробуйте еще раз:")
+        # Получаем текущее время в московском часовом поясе для корректного сравнения
+        moscow_tz = pytz.timezone('Europe/Moscow')
+        current_time_moscow = datetime.now(pytz.UTC).astimezone(moscow_tz).replace(tzinfo=None)
+        
+        # Проверяем, что дата в будущем (сравниваем московское время с московским)
+        if schedule_time <= current_time_moscow:
+            await message.answer("Пожалуйста, укажите дату и время в будущем (московское время). Текущее московское время: " + 
+                                current_time_moscow.strftime('%d.%m.%Y %H:%M') + ". Попробуйте еще раз:")
             return
         
         async with state.proxy() as data:
@@ -416,7 +392,7 @@ async def process_schedule_time(message: types.Message, state: FSMContext):
             
             confirmation_message = (
                 f"Вы собираетесь запланировать отправку следующего сообщения {target_description} "
-                f"(всего {len(users)} пользователей) на {schedule_time.strftime('%d.%m.%Y %H:%M')}:\n\n"
+                f"(всего {len(users)} пользователей) на {schedule_time.strftime('%d.%m.%Y %H:%M')} (по Московскому времени):\n\n"
                 f"{data['message_text']}\n\n"
                 f"Подтвердите планирование (да/нет):"
             )
@@ -426,7 +402,7 @@ async def process_schedule_time(message: types.Message, state: FSMContext):
     
     except ValueError:
         await message.answer(
-            "Неверный формат даты и времени. Пожалуйста, используйте формат 'ДД.ММ.ГГГГ ЧЧ:ММ', например: 31.12.2023 15:30"
+            "Неверный формат даты и времени. Пожалуйста, используйте формат 'ДД.ММ.ГГГГ ЧЧ:ММ' (по Московскому времени), например: 31.12.2023 15:30"
         )
 
 async def process_schedule_confirmation(message: types.Message, state: FSMContext):
@@ -452,7 +428,7 @@ async def process_schedule_confirmation(message: types.Message, state: FSMContex
         result_message = (
             f"✅ Рассылка успешно запланирована.\n\n"
             f"Сообщение будет отправлено {target_description} "
-            f"{schedule_time.strftime('%d.%m.%Y в %H:%M')}\n\n"
+            f"{schedule_time.strftime('%d.%m.%Y в %H:%M')} (по Московскому времени)\n\n"
             f"ID рассылки: {broadcast_id}"
         )
         
@@ -481,7 +457,6 @@ def register_admin_handlers(dp: Dispatcher):
     dp.register_message_handler(process_invite_link_source, admin_filter, state=InviteLinkStates.waiting_for_source)
     dp.register_message_handler(process_invite_link_description, admin_filter, state=InviteLinkStates.waiting_for_description)
     dp.register_message_handler(process_invite_link_expire_date, admin_filter, state=InviteLinkStates.waiting_for_expire_date)
-    dp.register_message_handler(process_invite_link_member_limit, admin_filter, state=InviteLinkStates.waiting_for_member_limit)
     
     # Обработчики для создания рассылок
     dp.register_message_handler(create_broadcast_cmd, admin_filter, Text(equals="📨 Создать рассылку"), state="*")

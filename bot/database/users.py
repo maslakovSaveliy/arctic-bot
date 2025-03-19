@@ -140,7 +140,19 @@ async def get_all_users(status=None, limit=None, skip=0):
     if limit:
         cursor = cursor.limit(limit)
     
-    return await cursor.to_list(length=None)
+    users = await cursor.to_list(length=None)
+    logging.info(f"Получено {len(users)} пользователей из базы данных. Фильтр по статусу: {status}")
+    
+    # Подробное логирование нескольких первых пользователей для диагностики
+    if users:
+        sample_size = min(3, len(users))
+        for i in range(sample_size):
+            user = users[i]
+            user_id = user.get('user_id', 'не указан')
+            status = user.get('status', 'не указан')
+            logging.info(f"Пользователь [{i+1}/{sample_size}]: ID={user_id}, статус={status}")
+    
+    return users
 
 async def get_users_by_filter(filter_query, limit=None, skip=0):
     """

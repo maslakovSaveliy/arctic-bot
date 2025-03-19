@@ -6,12 +6,13 @@ import logging
 import asyncio
 from aiogram import Bot, Dispatcher, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from datetime import datetime
 
 from bot.config.config import TELEGRAM_BOT_TOKEN, DEBUG
 from bot.handlers import register_all_handlers
 from bot.database import init_db, close_db_connection
-from bot.utils.logging_setup import setup_logging
-from bot.utils.scheduler import setup_scheduler, check_scheduled_broadcasts
+from bot.utils.logging_setup import setup_logging, clean_old_logs
+from bot.utils.scheduler import setup_scheduler, check_scheduled_broadcasts, migrate_old_broadcasts, create_broadcast_check_job
 from bot.handlers.join_request_handlers import clean_old_pending_approvals
 
 # Настройка логирования
@@ -38,20 +39,49 @@ async def on_startup(dispatcher):
     # Регистрация обработчиков
     register_all_handlers(dispatcher)
     
+    # Проверка экземпляра бота для диагностики
+    logging.info(f"Экземпляр бота при запуске: {bot}")
+    
+    # Запускаем миграцию старых запланированных рассылок
+    logging.info("Запуск миграции старых запланированных рассылок...")
+    await migrate_old_broadcasts()
+    
+    # Первая проверка сразу при запуске
+    await check_scheduled_broadcasts(bot)
+    
+    # Создаем функцию-обертку для передачи бота
+    check_broadcasts_job = create_broadcast_check_job(bot)
+    
     # Добавляем задачу для проверки запланированных рассылок
     scheduler.add_job(
-        check_scheduled_broadcasts,
+        check_broadcasts_job,
         'interval',
         minutes=1,
-        kwargs={'bot': bot}
+        id='check_broadcasts',
+        replace_existing=True,
+        next_run_time=datetime.utcnow()  # Запускаем немедленно после старта
     )
+    logging.info("Планировщик рассылок добавлен с интервалом 1 минута")
     
     # Добавляем задачу для очистки старых ожидающих запросов на вступление
     scheduler.add_job(
         clean_old_pending_approvals,
         'interval',
-        hours=24  # Запускаем раз в сутки
+        hours=24,  # Запускаем раз в сутки
+        id='clean_approvals',
+        replace_existing=True
     )
+    
+    # Добавляем задачу для очистки старых файлов логов
+    scheduler.add_job(
+        clean_old_logs,
+        'interval',
+        hours=24,  # Запускаем раз в сутки
+        id='clean_old_logs',
+        replace_existing=True,
+        kwargs={'days_to_keep': 30}  # Хранить логи 30 дней
+    )
+    logging.info("Планировщик очистки логов добавлен (интервал: 24 часа)")
     
     logging.info("Бот запущен")
 
