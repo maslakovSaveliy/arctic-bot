@@ -26,8 +26,10 @@ class BroadcastStates(StatesGroup):
     """
     waiting_for_message = State()
     waiting_for_scheduled_message = State()  # Отдельное состояние для запланированной рассылки
+    waiting_for_media = State()              # Ожидание медиа-контента
+    waiting_for_scheduled_media = State()    # Ожидание медиа для запланированной рассылки
     waiting_for_target = State()
-    waiting_for_scheduled_target = State()  # Отдельное состояние для выбора цели в запланированной рассылке
+    waiting_for_scheduled_target = State()   # Отдельное состояние для выбора цели в запланированной рассылке
     waiting_for_confirmation = State()
     waiting_for_schedule_time = State()
     waiting_for_schedule_confirmation = State()
@@ -180,32 +182,168 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data["message_text"] = message.text
     
-    # Добавляем выбор таргетированной аудитории
+    # Предлагаем добавить медиа
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Без медиа", callback_data="media_none"))
+    keyboard.add(types.InlineKeyboardButton("Добавить фото", callback_data="media_photo"))
+    keyboard.add(types.InlineKeyboardButton("Добавить видео", callback_data="media_video"))
+    keyboard.add(types.InlineKeyboardButton("Добавить GIF", callback_data="media_animation"))
+    
+    await message.answer(
+        "Хотите добавить медиа-контент к рассылке?", 
+        reply_markup=keyboard
+    )
+    await BroadcastStates.waiting_for_media.set()
+
+async def process_broadcast_media_choice(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает выбор типа медиа-контента
+    """
+    await callback_query.answer()
+    
+    choice = callback_query.data
+    
+    if choice == "media_none":
+        # Пользователь выбрал не добавлять медиа, переходим к выбору целевой аудитории
+        await show_target_selection(callback_query.message, state)
+    else:
+        # Сохраняем выбранный тип медиа
+        media_type = choice.split("_")[1]  # Получаем photo, video или animation
+        async with state.proxy() as data:
+            data["media_type"] = media_type
+        
+        # Просим отправить медиа-файл
+        media_type_text = {
+            "photo": "фотографию",
+            "video": "видео",
+            "animation": "GIF-анимацию"
+        }.get(media_type, "медиа-файл")
+        
+        await callback_query.message.answer(f"Отправьте {media_type_text} для рассылки:")
+
+async def process_broadcast_media(message: types.Message, state: FSMContext):
+    """
+    Обрабатывает полученный медиа-файл для рассылки
+    """
+    async with state.proxy() as data:
+        media_type = data.get("media_type")
+        
+        if media_type == "photo" and message.photo:
+            # Берем последнее фото (максимальное разрешение)
+            data["media"] = message.photo[-1].file_id
+            logging.info(f"Получено фото для рассылки: {data['media']}")
+        elif media_type == "video" and message.video:
+            data["media"] = message.video.file_id
+            logging.info(f"Получено видео для рассылки: {data['media']}")
+        elif media_type == "animation" and message.animation:
+            data["media"] = message.animation.file_id
+            logging.info(f"Получена GIF-анимация для рассылки: {data['media']}")
+        else:
+            await message.answer("Отправленный файл не соответствует выбранному типу медиа. Пожалуйста, отправьте корректный файл или выберите другой тип.")
+            return
+    
+    # Переходим к выбору целевой аудитории
+    await show_target_selection(message, state)
+
+async def show_target_selection(message, state: FSMContext, page=0):
+    """
+    Показывает выбор целевой аудитории с пагинацией
+    
+    Args:
+        message: Сообщение или коллбэк
+        state: Состояние FSM
+        page (int): Номер страницы для пагинации (начиная с 0)
+    """
+    # Получаем активных пользователей и их источники
     sources = {}
     active_users = await get_all_users(status="active")
     
-    # Собираем уникальные источники
+    # Собираем уникальные источники и количество пользователей
     for user in active_users:
         source = user.get("source", "Неизвестно")
         if source not in sources:
             sources[source] = 0
         sources[source] += 1
     
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="target_all"))
+    # Сортируем источники по количеству пользователей (от большего к меньшему)
+    sorted_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)
     
-    for source, count in sources.items():
+    # Конфигурация пагинации
+    SOURCES_PER_PAGE = 5  # Количество источников на одной странице
+    total_pages = max(1, (len(sorted_sources) + SOURCES_PER_PAGE - 1) // SOURCES_PER_PAGE)
+    
+    # Проверяем, нужна ли пагинация
+    pagination_needed = len(sorted_sources) > SOURCES_PER_PAGE
+    
+    # Ограничиваем страницы доступным диапазоном
+    page = max(0, min(page, total_pages - 1))
+    
+    # Выбираем источники для текущей страницы
+    start_idx = page * SOURCES_PER_PAGE
+    end_idx = min(start_idx + SOURCES_PER_PAGE, len(sorted_sources))
+    current_page_sources = sorted_sources[start_idx:end_idx]
+    
+    # Создаем клавиатуру
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # Добавляем кнопку "Все пользователи" только на первой странице
+    if page == 0:
+        keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="target_all"))
+    
+    # Добавляем кнопки источников
+    for source, count in current_page_sources:
         if source:  # Игнорируем пустые источники
             keyboard.add(types.InlineKeyboardButton(
                 f"{source} ({count} пользователей)", 
                 callback_data=f"target_source_{source}"
             ))
     
-    await message.answer(
-        "Выберите целевую аудиторию для рассылки:",
-        reply_markup=keyboard
-    )
+    # Добавляем кнопки навигации, если нужна пагинация
+    if pagination_needed:
+        nav_buttons = []
+        
+        # Кнопка "Назад"
+        if page > 0:
+            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"target_page_{page-1}"))
+        
+        # Информация о текущей странице
+        page_info = f"{page+1}/{total_pages}"
+        nav_buttons.append(types.InlineKeyboardButton(page_info, callback_data="target_page_info"))
+        
+        # Кнопка "Вперед"
+        if page < total_pages - 1:
+            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"target_page_{page+1}"))
+            
+        keyboard.row(*nav_buttons)
+    
+    # Отправляем сообщение с клавиатурой
+    message_text = "Выберите целевую аудиторию для рассылки:"
+    
+    # Проверяем, это новое сообщение или обновление существующего
+    if isinstance(message, types.Message):
+        await message.answer(message_text, reply_markup=keyboard)
+    else:
+        await message.edit_text(message_text, reply_markup=keyboard)
+    
     await BroadcastStates.waiting_for_target.set()
+
+async def process_target_pagination(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает пагинацию при выборе целевой аудитории
+    """
+    await callback_query.answer()
+    
+    # Извлекаем номер страницы из данных колбэка
+    page_data = callback_query.data
+    if page_data == "target_page_info":
+        # Это нажатие на номер страницы, игнорируем
+        return
+    
+    # Формат: "target_page_X"
+    page = int(page_data.split("_")[2])
+    
+    # Показываем выбранную страницу
+    await show_target_selection(callback_query.message, state, page)
 
 async def process_broadcast_target(callback_query: types.CallbackQuery, state: FSMContext):
     """
@@ -240,12 +378,24 @@ async def process_broadcast_target(callback_query: types.CallbackQuery, state: F
         
         logging.info(f"Найдено {len(users)} активных пользователей для рассылки с фильтром: {target_filter}")
         
+        # Формируем сообщение для подтверждения
         confirmation_message = (
             f"Вы собираетесь отправить следующее сообщение {target_description} "
             f"(всего {len(users)} активных пользователей):\n\n"
-            f"{data['message_text']}\n\n"
-            f"Подтвердите отправку (да/нет):"
+            f"{data['message_text']}"
         )
+        
+        # Добавляем информацию о медиа, если есть
+        if "media" in data and "media_type" in data:
+            media_type_text = {
+                "photo": "фотографией",
+                "video": "видео",
+                "animation": "GIF-анимацией"
+            }.get(data["media_type"], "медиа")
+            
+            confirmation_message += f"\n\nСообщение будет отправлено с {media_type_text}."
+        
+        confirmation_message += "\n\nПодтвердите отправку (да/нет):"
     
     await callback_query.message.answer(confirmation_message)
     await BroadcastStates.waiting_for_confirmation.set()
@@ -259,12 +409,20 @@ async def process_broadcast_confirmation(message: types.Message, state: FSMConte
             message_text = data["message_text"]
             target_filter = data.get("target_filter")
             target_description = data.get("target_description", "всем пользователям")
+            media = data.get("media")
+            media_type = data.get("media_type")
         
         # Отправляем уведомление о начале рассылки
         await message.answer(f"Рассылка {target_description} начата. Это может занять некоторое время...")
         
-        # Выполняем рассылку
-        stats = await send_broadcast(message.bot, message_text, target_filter)
+        # Выполняем рассылку с медиа (если есть)
+        stats = await send_broadcast(
+            bot=message.bot, 
+            message_text=message_text, 
+            target_filter=target_filter,
+            media=media,
+            media_type=media_type
+        )
         
         # Отправляем отчет о результатах
         result_message = (
@@ -291,37 +449,171 @@ async def process_scheduled_broadcast_message(message: types.Message, state: FSM
     """
     Обрабатывает ввод текста сообщения для запланированной рассылки
     """
-    # Этот обработчик аналогичен process_broadcast_message,
-    # но ведет к выбору времени отправки
     async with state.proxy() as data:
         data["message_text"] = message.text
+    
+    # Предлагаем добавить медиа (аналогично обычной рассылке)
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Без медиа", callback_data="schedule_media_none"))
+    keyboard.add(types.InlineKeyboardButton("Добавить фото", callback_data="schedule_media_photo"))
+    keyboard.add(types.InlineKeyboardButton("Добавить видео", callback_data="schedule_media_video"))
+    keyboard.add(types.InlineKeyboardButton("Добавить GIF", callback_data="schedule_media_animation"))
+    
+    await message.answer(
+        "Хотите добавить медиа-контент к запланированной рассылке?", 
+        reply_markup=keyboard
+    )
+    await BroadcastStates.waiting_for_scheduled_media.set()
+
+async def process_scheduled_broadcast_media_choice(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает выбор типа медиа-контента для запланированной рассылки
+    """
+    await callback_query.answer()
+    
+    choice = callback_query.data
+    
+    if choice == "schedule_media_none":
+        # Пользователь выбрал не добавлять медиа, переходим к выбору целевой аудитории
+        await show_scheduled_target_selection(callback_query.message, state)
+    else:
+        # Сохраняем выбранный тип медиа
+        media_type = choice.split("_")[2]  # Получаем photo, video или animation
+        async with state.proxy() as data:
+            data["media_type"] = media_type
         
-    # Добавляем выбор таргетированной аудитории (аналогично обычной рассылке)
+        # Просим отправить медиа-файл
+        media_type_text = {
+            "photo": "фотографию",
+            "video": "видео",
+            "animation": "GIF-анимацию"
+        }.get(media_type, "медиа-файл")
+        
+        await callback_query.message.answer(f"Отправьте {media_type_text} для запланированной рассылки:")
+
+async def process_scheduled_broadcast_media(message: types.Message, state: FSMContext):
+    """
+    Обрабатывает полученный медиа-файл для запланированной рассылки
+    """
+    async with state.proxy() as data:
+        media_type = data.get("media_type")
+        
+        if media_type == "photo" and message.photo:
+            # Берем последнее фото (максимальное разрешение)
+            data["media"] = message.photo[-1].file_id
+            logging.info(f"Получено фото для запланированной рассылки: {data['media']}")
+        elif media_type == "video" and message.video:
+            data["media"] = message.video.file_id
+            logging.info(f"Получено видео для запланированной рассылки: {data['media']}")
+        elif media_type == "animation" and message.animation:
+            data["media"] = message.animation.file_id
+            logging.info(f"Получена GIF-анимация для запланированной рассылки: {data['media']}")
+        else:
+            await message.answer("Отправленный файл не соответствует выбранному типу медиа. Пожалуйста, отправьте корректный файл или выберите другой тип.")
+            return
+    
+    # Переходим к выбору целевой аудитории
+    await show_scheduled_target_selection(message, state)
+
+async def show_scheduled_target_selection(message, state: FSMContext, page=0):
+    """
+    Показывает выбор целевой аудитории для запланированной рассылки с пагинацией
+    
+    Args:
+        message: Сообщение или коллбэк
+        state: Состояние FSM
+        page (int): Номер страницы для пагинации (начиная с 0)
+    """
+    # Получаем активных пользователей и их источники
     sources = {}
     active_users = await get_all_users(status="active")
     
-    # Собираем уникальные источники
+    # Собираем уникальные источники и количество пользователей
     for user in active_users:
         source = user.get("source", "Неизвестно")
         if source not in sources:
             sources[source] = 0
         sources[source] += 1
     
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="schedule_target_all"))
+    # Сортируем источники по количеству пользователей (от большего к меньшему)
+    sorted_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)
     
-    for source, count in sources.items():
+    # Конфигурация пагинации
+    SOURCES_PER_PAGE = 5  # Количество источников на одной странице
+    total_pages = max(1, (len(sorted_sources) + SOURCES_PER_PAGE - 1) // SOURCES_PER_PAGE)
+    
+    # Проверяем, нужна ли пагинация
+    pagination_needed = len(sorted_sources) > SOURCES_PER_PAGE
+    
+    # Ограничиваем страницы доступным диапазоном
+    page = max(0, min(page, total_pages - 1))
+    
+    # Выбираем источники для текущей страницы
+    start_idx = page * SOURCES_PER_PAGE
+    end_idx = min(start_idx + SOURCES_PER_PAGE, len(sorted_sources))
+    current_page_sources = sorted_sources[start_idx:end_idx]
+    
+    # Создаем клавиатуру
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # Добавляем кнопку "Все пользователи" только на первой странице
+    if page == 0:
+        keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="schedule_target_all"))
+    
+    # Добавляем кнопки источников
+    for source, count in current_page_sources:
         if source:  # Игнорируем пустые источники
             keyboard.add(types.InlineKeyboardButton(
                 f"{source} ({count} пользователей)", 
                 callback_data=f"schedule_target_source_{source}"
             ))
     
-    await message.answer(
-        "Выберите целевую аудиторию для запланированной рассылки:",
-        reply_markup=keyboard
-    )
+    # Добавляем кнопки навигации, если нужна пагинация
+    if pagination_needed:
+        nav_buttons = []
+        
+        # Кнопка "Назад"
+        if page > 0:
+            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"schedule_target_page_{page-1}"))
+        
+        # Информация о текущей странице
+        page_info = f"{page+1}/{total_pages}"
+        nav_buttons.append(types.InlineKeyboardButton(page_info, callback_data="schedule_target_page_info"))
+        
+        # Кнопка "Вперед"
+        if page < total_pages - 1:
+            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"schedule_target_page_{page+1}"))
+            
+        keyboard.row(*nav_buttons)
+    
+    # Отправляем сообщение с клавиатурой
+    message_text = "Выберите целевую аудиторию для запланированной рассылки:"
+    
+    # Проверяем, это новое сообщение или обновление существующего
+    if isinstance(message, types.Message):
+        await message.answer(message_text, reply_markup=keyboard)
+    else:
+        await message.edit_text(message_text, reply_markup=keyboard)
+    
     await BroadcastStates.waiting_for_scheduled_target.set()
+
+async def process_scheduled_target_pagination(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает пагинацию при выборе целевой аудитории для запланированной рассылки
+    """
+    await callback_query.answer()
+    
+    # Извлекаем номер страницы из данных колбэка
+    page_data = callback_query.data
+    if page_data == "schedule_target_page_info":
+        # Это нажатие на номер страницы, игнорируем
+        return
+    
+    # Формат: "schedule_target_page_X"
+    page = int(page_data.split("_")[3])
+    
+    # Показываем выбранную страницу
+    await show_scheduled_target_selection(callback_query.message, state, page)
 
 async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery, state: FSMContext):
     """
@@ -356,6 +648,7 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
         
         logging.info(f"Найдено {len(users)} активных пользователей для запланированной рассылки с фильтром: {target_filter}")
     
+    # Переходим к вводу времени отправки
     await callback_query.message.answer(
         "Введите время отправки рассылки в формате 'ДД.ММ.ГГГГ ЧЧ:ММ' (по Московскому времени), например: 31.12.2023 15:30.\n\n"
         "Внимание: время должно быть указано именно в московском часовом поясе (МСК, UTC+3)."
@@ -384,18 +677,34 @@ async def process_schedule_time(message: types.Message, state: FSMContext):
             data["schedule_time"] = schedule_time
             target_description = data.get("target_description", "всем пользователям")
             
-            # Получаем количество пользователей
-            if data.get("target_filter"):
-                users = await get_users_by_filter(data["target_filter"])
+            # Получаем количество активных пользователей для рассылки
+            target_filter = data.get("target_filter")
+            if target_filter:
+                # Всегда добавляем статус "active"
+                combined_filter = target_filter.copy()
+                combined_filter["status"] = "active"
+                users = await get_users_by_filter(combined_filter)
             else:
                 users = await get_all_users(status="active")
             
+            # Формируем сообщение для подтверждения
             confirmation_message = (
                 f"Вы собираетесь запланировать отправку следующего сообщения {target_description} "
-                f"(всего {len(users)} пользователей) на {schedule_time.strftime('%d.%m.%Y %H:%M')} (по Московскому времени):\n\n"
-                f"{data['message_text']}\n\n"
-                f"Подтвердите планирование (да/нет):"
+                f"(всего {len(users)} пользователей) на {schedule_time.strftime('%d.%m.%Y в %H:%M')} (по Московскому времени):\n\n"
+                f"{data['message_text']}"
             )
+            
+            # Добавляем информацию о медиа, если есть
+            if "media" in data and "media_type" in data:
+                media_type_text = {
+                    "photo": "фотографией",
+                    "video": "видео",
+                    "animation": "GIF-анимацией"
+                }.get(data["media_type"], "медиа")
+                
+                confirmation_message += f"\n\nСообщение будет отправлено с {media_type_text}."
+            
+            confirmation_message += "\n\nПодтвердите планирование (да/нет):"
         
         await message.answer(confirmation_message)
         await BroadcastStates.waiting_for_schedule_confirmation.set()
@@ -415,13 +724,17 @@ async def process_schedule_confirmation(message: types.Message, state: FSMContex
             schedule_time = data["schedule_time"]
             target_filter = data.get("target_filter")
             target_description = data.get("target_description", "всем пользователям")
+            media = data.get("media")
+            media_type = data.get("media_type")
         
         # Планируем рассылку
         broadcast_id = await schedule_broadcast(
-            message.bot,
-            message_text,
-            schedule_time,
-            target_filter
+            bot=message.bot,
+            message_text=message_text,
+            schedule_time=schedule_time,
+            target_filter=target_filter,
+            media=media,
+            media_type=media_type
         )
         
         # Отправляем подтверждение
@@ -461,8 +774,18 @@ def register_admin_handlers(dp: Dispatcher):
     # Обработчики для создания рассылок
     dp.register_message_handler(create_broadcast_cmd, admin_filter, Text(equals="📨 Создать рассылку"), state="*")
     dp.register_message_handler(process_broadcast_message, admin_filter, state=BroadcastStates.waiting_for_message)
+    dp.register_callback_query_handler(process_broadcast_media_choice, admin_filter, 
+                                      lambda c: c.data.startswith("media_"), 
+                                      state=BroadcastStates.waiting_for_media)
+    dp.register_message_handler(process_broadcast_media, admin_filter, 
+                              content_types=types.ContentTypes.ANY,
+                              state=BroadcastStates.waiting_for_media)
+    # Обработчик пагинации для целевой аудитории
+    dp.register_callback_query_handler(process_target_pagination, admin_filter, 
+                                      lambda c: c.data.startswith("target_page_"), 
+                                      state=BroadcastStates.waiting_for_target)
     dp.register_callback_query_handler(process_broadcast_target, admin_filter, 
-                                      lambda c: c.data.startswith("target_"), 
+                                      lambda c: c.data.startswith("target_") and not c.data.startswith("target_page_"), 
                                       state=BroadcastStates.waiting_for_target)
     dp.register_message_handler(process_broadcast_confirmation, admin_filter, state=BroadcastStates.waiting_for_confirmation)
     
@@ -470,8 +793,18 @@ def register_admin_handlers(dp: Dispatcher):
     dp.register_message_handler(schedule_broadcast_cmd, admin_filter, Text(equals="📅 Запланировать рассылку"), state="*")
     dp.register_message_handler(process_scheduled_broadcast_message, admin_filter, 
                                state=BroadcastStates.waiting_for_scheduled_message)
+    dp.register_callback_query_handler(process_scheduled_broadcast_media_choice, admin_filter, 
+                                      lambda c: c.data.startswith("schedule_media_"), 
+                                      state=BroadcastStates.waiting_for_scheduled_media)
+    dp.register_message_handler(process_scheduled_broadcast_media, admin_filter, 
+                              content_types=types.ContentTypes.ANY,
+                              state=BroadcastStates.waiting_for_scheduled_media)
+    # Обработчик пагинации для целевой аудитории запланированной рассылки
+    dp.register_callback_query_handler(process_scheduled_target_pagination, admin_filter, 
+                                      lambda c: c.data.startswith("schedule_target_page_"), 
+                                      state=BroadcastStates.waiting_for_scheduled_target)
     dp.register_callback_query_handler(process_scheduled_broadcast_target, admin_filter, 
-                                      lambda c: c.data.startswith("schedule_target_"), 
+                                      lambda c: c.data.startswith("schedule_target_") and not c.data.startswith("schedule_target_page_"), 
                                       state=BroadcastStates.waiting_for_scheduled_target)
     dp.register_message_handler(process_schedule_time, admin_filter, state=BroadcastStates.waiting_for_schedule_time)
     dp.register_message_handler(process_schedule_confirmation, admin_filter, state=BroadcastStates.waiting_for_schedule_confirmation) 

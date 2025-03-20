@@ -173,13 +173,37 @@ async def check_scheduled_broadcasts(bot):
             )
             
             try:
-                # Отправляем рассылку
+                # Определяем оптимальные параметры для рассылки на основе количества пользователей
+                total_users = broadcast.get("total_users", 0)
+                batch_size = 25
+                batch_delay = 3
+                
+                # Для больших рассылок увеличиваем размер пакета и задержку
+                if total_users > 1000:
+                    batch_size = 50
+                    batch_delay = 5
+                elif total_users > 5000:
+                    batch_size = 100
+                    batch_delay = 10
+                
+                # Получаем данные о медиа, если они есть
+                media = broadcast.get("media")
+                media_type = broadcast.get("media_type")
+                
+                if media and media_type:
+                    logging.info(f"Рассылка ID:{broadcast_id} содержит медиа-контент типа: {media_type}")
+                
+                # Отправляем рассылку с поддержкой медиа-контента
                 logging.info(f"Отправляем рассылку ID:{broadcast_id}")
                 stats = await send_broadcast(
-                    bot,
-                    broadcast["message_text"],
+                    bot=bot,
+                    message_text=broadcast["message_text"],
                     target_filter=target_filter,  # Используем обновленный фильтр
-                    save_to_db=False
+                    save_to_db=False,
+                    batch_size=batch_size,
+                    batch_delay=batch_delay,
+                    media=media,
+                    media_type=media_type
                 )
                 
                 # Обновляем статус рассылки
