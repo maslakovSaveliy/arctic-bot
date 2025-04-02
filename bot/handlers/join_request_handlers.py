@@ -10,6 +10,7 @@ from aiogram.types import ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardB
 from bot.config.config import DEFAULT_WELCOME_MESSAGE
 from bot.database import add_user, get_source_by_link, update_user, get_user
 from bot.services.notifications import send_welcome_message
+from bot.handlers.city_handlers import ask_city_by_user_id
 
 # Словарь для хранения информации о пользователях, ожидающих одобрения
 # Формат: {user_id: {"join_request": join_request, "source": source, "timestamp": datetime}}
@@ -83,6 +84,9 @@ async def approve_join_request(user_id):
     
     Args:
         user_id (int): ID пользователя
+        
+    Returns:
+        bool: True, если запрос был успешно одобрен
     """
     try:
         # Проверяем, есть ли запрос в словаре ожидающих
@@ -106,9 +110,6 @@ async def approve_join_request(user_id):
                         "last_interaction": datetime.utcnow()
                     }
                 )
-                
-                # Отправляем приветственное сообщение
-                await send_welcome_message(user_id, DEFAULT_WELCOME_MESSAGE)
                 
                 # Удаляем из словаря ожидающих
                 del pending_approvals[user_id]

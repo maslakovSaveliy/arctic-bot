@@ -245,7 +245,7 @@ async def process_broadcast_media(message: types.Message, state: FSMContext):
     # Переходим к выбору целевой аудитории
     await show_target_selection(message, state)
 
-async def show_target_selection(message, state: FSMContext, page=0):
+async def show_target_selection(message, state: FSMContext, page=0, filter_type="source"):
     """
     Показывает выбор целевой аудитории с пагинацией
     
@@ -253,35 +253,36 @@ async def show_target_selection(message, state: FSMContext, page=0):
         message: Сообщение или коллбэк
         state: Состояние FSM
         page (int): Номер страницы для пагинации (начиная с 0)
+        filter_type (str): Тип фильтра ("source" или "city")
     """
-    # Получаем активных пользователей и их источники
-    sources = {}
+    # Получаем активных пользователей и их источники или города
+    filters = {}
     active_users = await get_all_users(status="active")
     
-    # Собираем уникальные источники и количество пользователей
+    # Собираем уникальные источники или города и количество пользователей
     for user in active_users:
-        source = user.get("source", "Неизвестно")
-        if source not in sources:
-            sources[source] = 0
-        sources[source] += 1
+        filter_value = user.get(filter_type, "Неизвестно")
+        if filter_value not in filters:
+            filters[filter_value] = 0
+        filters[filter_value] += 1
     
-    # Сортируем источники по количеству пользователей (от большего к меньшему)
-    sorted_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)
+    # Сортируем по количеству пользователей (от большего к меньшему)
+    sorted_filters = sorted(filters.items(), key=lambda x: x[1], reverse=True)
     
     # Конфигурация пагинации
-    SOURCES_PER_PAGE = 5  # Количество источников на одной странице
-    total_pages = max(1, (len(sorted_sources) + SOURCES_PER_PAGE - 1) // SOURCES_PER_PAGE)
+    FILTERS_PER_PAGE = 5  # Количество источников или городов на одной странице
+    total_pages = max(1, (len(sorted_filters) + FILTERS_PER_PAGE - 1) // FILTERS_PER_PAGE)
     
     # Проверяем, нужна ли пагинация
-    pagination_needed = len(sorted_sources) > SOURCES_PER_PAGE
+    pagination_needed = len(sorted_filters) > FILTERS_PER_PAGE
     
     # Ограничиваем страницы доступным диапазоном
     page = max(0, min(page, total_pages - 1))
     
-    # Выбираем источники для текущей страницы
-    start_idx = page * SOURCES_PER_PAGE
-    end_idx = min(start_idx + SOURCES_PER_PAGE, len(sorted_sources))
-    current_page_sources = sorted_sources[start_idx:end_idx]
+    # Выбираем источники или города для текущей страницы
+    start_idx = page * FILTERS_PER_PAGE
+    end_idx = min(start_idx + FILTERS_PER_PAGE, len(sorted_filters))
+    current_page_filters = sorted_filters[start_idx:end_idx]
     
     # Создаем клавиатуру
     keyboard = types.InlineKeyboardMarkup()
@@ -290,12 +291,12 @@ async def show_target_selection(message, state: FSMContext, page=0):
     if page == 0:
         keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="target_all"))
     
-    # Добавляем кнопки источников
-    for source, count in current_page_sources:
-        if source:  # Игнорируем пустые источники
+    # Добавляем кнопки источников или городов
+    for filter_value, count in current_page_filters:
+        if filter_value:  # Игнорируем пустые источники или города
             keyboard.add(types.InlineKeyboardButton(
-                f"{source} ({count} пользователей)", 
-                callback_data=f"target_source_{source}"
+                f"{filter_value} ({count} пользователей)", 
+                callback_data=f"target_{filter_type}_{filter_value}"
             ))
     
     # Добавляем кнопки навигации, если нужна пагинация
@@ -304,7 +305,7 @@ async def show_target_selection(message, state: FSMContext, page=0):
         
         # Кнопка "Назад"
         if page > 0:
-            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"target_page_{page-1}"))
+            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"target_page_{filter_type}_{page-1}"))
         
         # Информация о текущей странице
         page_info = f"{page+1}/{total_pages}"
@@ -312,9 +313,15 @@ async def show_target_selection(message, state: FSMContext, page=0):
         
         # Кнопка "Вперед"
         if page < total_pages - 1:
-            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"target_page_{page+1}"))
+            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"target_page_{filter_type}_{page+1}"))
             
         keyboard.row(*nav_buttons)
+    
+    # Добавляем кнопку переключения типа фильтра
+    if filter_type == "source":
+        keyboard.add(types.InlineKeyboardButton("Перейти к фильтру по городам", callback_data="target_switch_city"))
+    else:
+        keyboard.add(types.InlineKeyboardButton("Перейти к фильтру по источникам", callback_data="target_switch_source"))
     
     # Отправляем сообщение с клавиатурой
     message_text = "Выберите целевую аудиторию для рассылки:"
@@ -333,17 +340,39 @@ async def process_target_pagination(callback_query: types.CallbackQuery, state: 
     """
     await callback_query.answer()
     
-    # Извлекаем номер страницы из данных колбэка
+    # Извлекаем данные из колбэка
     page_data = callback_query.data
     if page_data == "target_page_info":
         # Это нажатие на номер страницы, игнорируем
         return
     
-    # Формат: "target_page_X"
-    page = int(page_data.split("_")[2])
+    # Формат: "target_page_{filter_type}_{page}"
+    parts = page_data.split("_")
+    if len(parts) >= 4:
+        filter_type = parts[2]  # "source" или "city"
+        page = int(parts[3])
+        
+        # Показываем выбранную страницу с указанным типом фильтра
+        await show_target_selection(callback_query.message, state, page, filter_type)
+    else:
+        # Для обратной совместимости со старым форматом (без типа фильтра)
+        page = int(page_data.split("_")[2])
+        await show_target_selection(callback_query.message, state, page)
+
+async def process_target_filter_switch(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает переключение между фильтрами (источники/города)
+    """
+    await callback_query.answer()
     
-    # Показываем выбранную страницу
-    await show_target_selection(callback_query.message, state, page)
+    # Определяем, на какой тип фильтра переключаемся
+    if callback_query.data == "target_switch_city":
+        filter_type = "city"
+    else:
+        filter_type = "source"
+    
+    # Показываем выбор с новым типом фильтра
+    await show_target_selection(callback_query.message, state, 0, filter_type)
 
 async def process_broadcast_target(callback_query: types.CallbackQuery, state: FSMContext):
     """
@@ -360,6 +389,14 @@ async def process_broadcast_target(callback_query: types.CallbackQuery, state: F
         target_filter = {"source": source}
         target_description = f"пользователям из источника '{source}'"
         logging.info(f"Выбрана целевая аудитория: пользователи из источника '{source}'")
+    elif target_data.startswith("target_city_"):
+        city = target_data[12:]  # Вырезаем префикс "target_city_"
+        target_filter = {"city": city}
+        target_description = f"пользователям из города '{city}'"
+        logging.info(f"Выбрана целевая аудитория: пользователи из города '{city}'")
+    elif target_data.startswith("target_switch_"):
+        # Это обработчик переключения между фильтрами, должен обрабатываться в process_target_filter_switch
+        return
     else:
         logging.info("Выбрана целевая аудитория: все пользователи")
     
@@ -515,7 +552,7 @@ async def process_scheduled_broadcast_media(message: types.Message, state: FSMCo
     # Переходим к выбору целевой аудитории
     await show_scheduled_target_selection(message, state)
 
-async def show_scheduled_target_selection(message, state: FSMContext, page=0):
+async def show_scheduled_target_selection(message, state: FSMContext, page=0, filter_type="source"):
     """
     Показывает выбор целевой аудитории для запланированной рассылки с пагинацией
     
@@ -523,50 +560,77 @@ async def show_scheduled_target_selection(message, state: FSMContext, page=0):
         message: Сообщение или коллбэк
         state: Состояние FSM
         page (int): Номер страницы для пагинации (начиная с 0)
+        filter_type (str): Тип фильтра ("source" или "city")
     """
-    # Получаем активных пользователей и их источники
-    sources = {}
+    # Получаем активных пользователей и информацию о них
     active_users = await get_all_users(status="active")
     
-    # Собираем уникальные источники и количество пользователей
-    for user in active_users:
-        source = user.get("source", "Неизвестно")
-        if source not in sources:
-            sources[source] = 0
-        sources[source] += 1
+    # Определяем, какие данные показывать (источники или города)
+    if filter_type == "source":
+        # Собираем уникальные источники и количество пользователей
+        items = {}
+        for user in active_users:
+            item_value = user.get("source", "Неизвестно")
+            if item_value not in items:
+                items[item_value] = 0
+            items[item_value] += 1
+        
+        title = "Выберите целевую аудиторию для запланированной рассылки (по источникам):"
+        callback_prefix = "schedule_target_source_"
+    else:  # filter_type == "city"
+        # Собираем уникальные города и количество пользователей
+        items = {}
+        for user in active_users:
+            item_value = user.get("city", "Неизвестно")
+            if item_value not in items:
+                items[item_value] = 0
+            items[item_value] += 1
+        
+        title = "Выберите целевую аудиторию для запланированной рассылки (по городам):"
+        callback_prefix = "schedule_target_city_"
     
-    # Сортируем источники по количеству пользователей (от большего к меньшему)
-    sorted_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)
+    # Сортируем по количеству пользователей (от большего к меньшему)
+    sorted_items = sorted(items.items(), key=lambda x: x[1], reverse=True)
     
     # Конфигурация пагинации
-    SOURCES_PER_PAGE = 5  # Количество источников на одной странице
-    total_pages = max(1, (len(sorted_sources) + SOURCES_PER_PAGE - 1) // SOURCES_PER_PAGE)
+    ITEMS_PER_PAGE = 5  # Количество элементов на одной странице
+    total_pages = max(1, (len(sorted_items) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
     
     # Проверяем, нужна ли пагинация
-    pagination_needed = len(sorted_sources) > SOURCES_PER_PAGE
+    pagination_needed = len(sorted_items) > ITEMS_PER_PAGE
     
     # Ограничиваем страницы доступным диапазоном
     page = max(0, min(page, total_pages - 1))
     
-    # Выбираем источники для текущей страницы
-    start_idx = page * SOURCES_PER_PAGE
-    end_idx = min(start_idx + SOURCES_PER_PAGE, len(sorted_sources))
-    current_page_sources = sorted_sources[start_idx:end_idx]
+    # Выбираем элементы для текущей страницы
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = min(start_idx + ITEMS_PER_PAGE, len(sorted_items))
+    current_page_items = sorted_items[start_idx:end_idx]
     
     # Создаем клавиатуру
     keyboard = types.InlineKeyboardMarkup()
     
-    # Добавляем кнопку "Все пользователи" только на первой странице
+    # Только на первой странице добавляем переключение между источниками и городами
     if page == 0:
+        row_buttons = []
+        
+        # Кнопка выбора всех пользователей
         keyboard.add(types.InlineKeyboardButton("Все пользователи", callback_data="schedule_target_all"))
+        
+        # Переключение между источниками и городами
+        if filter_type == "source":
+            row_buttons.append(types.InlineKeyboardButton("📍 По городам", callback_data="schedule_target_switch_city"))
+        else:
+            row_buttons.append(types.InlineKeyboardButton("🔗 По источникам", callback_data="schedule_target_switch_source"))
+        
+        keyboard.row(*row_buttons)
     
-    # Добавляем кнопки источников
-    for source, count in current_page_sources:
-        if source:  # Игнорируем пустые источники
-            keyboard.add(types.InlineKeyboardButton(
-                f"{source} ({count} пользователей)", 
-                callback_data=f"schedule_target_source_{source}"
-            ))
+    # Добавляем кнопки элементов (источников или городов)
+    for item, count in current_page_items:
+        if item:  # Игнорируем пустые значения
+            button_text = f"{item} ({count} пользователей)"
+            callback_data = f"{callback_prefix}{item}"
+            keyboard.add(types.InlineKeyboardButton(button_text, callback_data=callback_data))
     
     # Добавляем кнопки навигации, если нужна пагинация
     if pagination_needed:
@@ -574,7 +638,7 @@ async def show_scheduled_target_selection(message, state: FSMContext, page=0):
         
         # Кнопка "Назад"
         if page > 0:
-            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"schedule_target_page_{page-1}"))
+            nav_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"schedule_target_page_{filter_type}_{page-1}"))
         
         # Информация о текущей странице
         page_info = f"{page+1}/{total_pages}"
@@ -582,18 +646,17 @@ async def show_scheduled_target_selection(message, state: FSMContext, page=0):
         
         # Кнопка "Вперед"
         if page < total_pages - 1:
-            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"schedule_target_page_{page+1}"))
+            nav_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"schedule_target_page_{filter_type}_{page+1}"))
             
         keyboard.row(*nav_buttons)
     
     # Отправляем сообщение с клавиатурой
-    message_text = "Выберите целевую аудиторию для запланированной рассылки:"
     
     # Проверяем, это новое сообщение или обновление существующего
     if isinstance(message, types.Message):
-        await message.answer(message_text, reply_markup=keyboard)
+        await message.answer(title, reply_markup=keyboard)
     else:
-        await message.edit_text(message_text, reply_markup=keyboard)
+        await message.edit_text(title, reply_markup=keyboard)
     
     await BroadcastStates.waiting_for_scheduled_target.set()
 
@@ -603,17 +666,39 @@ async def process_scheduled_target_pagination(callback_query: types.CallbackQuer
     """
     await callback_query.answer()
     
-    # Извлекаем номер страницы из данных колбэка
+    # Извлекаем данные из колбэка
     page_data = callback_query.data
     if page_data == "schedule_target_page_info":
         # Это нажатие на номер страницы, игнорируем
         return
     
-    # Формат: "schedule_target_page_X"
-    page = int(page_data.split("_")[3])
+    # Формат: "schedule_target_page_{filter_type}_{page}"
+    parts = page_data.split("_")
+    if len(parts) >= 5:
+        filter_type = parts[3]  # "source" или "city"
+        page = int(parts[4])
+        
+        # Показываем выбранную страницу с указанным типом фильтра
+        await show_scheduled_target_selection(callback_query.message, state, page, filter_type)
+    else:
+        # Для обратной совместимости со старым форматом (без типа фильтра)
+        page = int(page_data.split("_")[3])
+        await show_scheduled_target_selection(callback_query.message, state, page)
+
+async def process_scheduled_target_filter_switch(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает переключение между фильтрами (источники/города) для запланированной рассылки
+    """
+    await callback_query.answer()
     
-    # Показываем выбранную страницу
-    await show_scheduled_target_selection(callback_query.message, state, page)
+    # Определяем, на какой тип фильтра переключаемся
+    if callback_query.data == "schedule_target_switch_city":
+        filter_type = "city"
+    else:
+        filter_type = "source"
+    
+    # Показываем выбор с новым типом фильтра
+    await show_scheduled_target_selection(callback_query.message, state, 0, filter_type)
 
 async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery, state: FSMContext):
     """
@@ -626,10 +711,18 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
     target_description = "всем пользователям"
     
     if target_data.startswith("schedule_target_source_"):
-        source = target_data[23:]  # Вырезаем префикс "schedule_target_source_"
+        source = target_data[22:]  # Вырезаем префикс "schedule_target_source_"
         target_filter = {"source": source}
         target_description = f"пользователям из источника '{source}'"
         logging.info(f"Выбрана целевая аудитория для запланированной рассылки: пользователи из источника '{source}'")
+    elif target_data.startswith("schedule_target_city_"):
+        city = target_data[20:]  # Вырезаем префикс "schedule_target_city_"
+        target_filter = {"city": city}
+        target_description = f"пользователям из города '{city}'"
+        logging.info(f"Выбрана целевая аудитория для запланированной рассылки: пользователи из города '{city}'")
+    elif target_data.startswith("schedule_target_switch_"):
+        # Это обработчик переключения между фильтрами, должен обрабатываться в process_scheduled_target_filter_switch
+        return
     else:
         logging.info("Выбрана целевая аудитория для запланированной рассылки: все пользователи")
     
@@ -637,7 +730,7 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
         data["target_filter"] = target_filter
         data["target_description"] = target_description
         
-        # Для логирования количества пользователей
+        # Получаем количество активных пользователей для рассылки
         if target_filter:
             # Всегда добавляем статус "active"
             combined_filter = target_filter.copy()
@@ -648,11 +741,13 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
         
         logging.info(f"Найдено {len(users)} активных пользователей для запланированной рассылки с фильтром: {target_filter}")
     
-    # Переходим к вводу времени отправки
+    # Просим пользователя указать время для планирования рассылки
     await callback_query.message.answer(
-        "Введите время отправки рассылки в формате 'ДД.ММ.ГГГГ ЧЧ:ММ' (по Московскому времени), например: 31.12.2023 15:30.\n\n"
-        "Внимание: время должно быть указано именно в московском часовом поясе (МСК, UTC+3)."
+        f"Вы выбрали отправку сообщения {target_description} (всего {len(users)} активных пользователей).\n\n"
+        "Теперь укажите дату и время для отправки рассылки в формате ДД.ММ.ГГГГ ЧЧ:ММ\n"
+        "Например: 25.12.2023 15:30"
     )
+    
     await BroadcastStates.waiting_for_schedule_time.set()
 
 async def process_schedule_time(message: types.Message, state: FSMContext):
@@ -778,14 +873,18 @@ def register_admin_handlers(dp: Dispatcher):
                                       lambda c: c.data.startswith("media_"), 
                                       state=BroadcastStates.waiting_for_media)
     dp.register_message_handler(process_broadcast_media, admin_filter, 
-                              content_types=types.ContentTypes.ANY,
-                              state=BroadcastStates.waiting_for_media)
+                               content_types=types.ContentTypes.ANY,
+                               state=BroadcastStates.waiting_for_media)
     # Обработчик пагинации для целевой аудитории
     dp.register_callback_query_handler(process_target_pagination, admin_filter, 
                                       lambda c: c.data.startswith("target_page_"), 
                                       state=BroadcastStates.waiting_for_target)
+    # Обработчик переключения между фильтрами (источники/города)
+    dp.register_callback_query_handler(process_target_filter_switch, admin_filter, 
+                                      lambda c: c.data.startswith("target_switch_"), 
+                                      state=BroadcastStates.waiting_for_target)
     dp.register_callback_query_handler(process_broadcast_target, admin_filter, 
-                                      lambda c: c.data.startswith("target_") and not c.data.startswith("target_page_"), 
+                                      lambda c: c.data.startswith("target_") and not c.data.startswith("target_page_") and not c.data.startswith("target_switch_"), 
                                       state=BroadcastStates.waiting_for_target)
     dp.register_message_handler(process_broadcast_confirmation, admin_filter, state=BroadcastStates.waiting_for_confirmation)
     
@@ -797,14 +896,17 @@ def register_admin_handlers(dp: Dispatcher):
                                       lambda c: c.data.startswith("schedule_media_"), 
                                       state=BroadcastStates.waiting_for_scheduled_media)
     dp.register_message_handler(process_scheduled_broadcast_media, admin_filter, 
-                              content_types=types.ContentTypes.ANY,
-                              state=BroadcastStates.waiting_for_scheduled_media)
+                               content_types=types.ContentTypes.ANY,
+                               state=BroadcastStates.waiting_for_scheduled_media)
     # Обработчик пагинации для целевой аудитории запланированной рассылки
     dp.register_callback_query_handler(process_scheduled_target_pagination, admin_filter, 
                                       lambda c: c.data.startswith("schedule_target_page_"), 
                                       state=BroadcastStates.waiting_for_scheduled_target)
+    dp.register_callback_query_handler(process_scheduled_target_filter_switch, admin_filter, 
+                                      lambda c: c.data.startswith("schedule_target_switch_"), 
+                                      state=BroadcastStates.waiting_for_scheduled_target)
     dp.register_callback_query_handler(process_scheduled_broadcast_target, admin_filter, 
-                                      lambda c: c.data.startswith("schedule_target_") and not c.data.startswith("schedule_target_page_"), 
+                                      lambda c: c.data.startswith("schedule_target_") and not c.data.startswith("schedule_target_page_") and not c.data.startswith("schedule_target_switch_"), 
                                       state=BroadcastStates.waiting_for_scheduled_target)
     dp.register_message_handler(process_schedule_time, admin_filter, state=BroadcastStates.waiting_for_schedule_time)
     dp.register_message_handler(process_schedule_confirmation, admin_filter, state=BroadcastStates.waiting_for_schedule_confirmation) 

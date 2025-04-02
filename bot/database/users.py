@@ -7,7 +7,7 @@ from datetime import datetime
 from bot.database.db import get_db
 from bot.config.config import USERS_COLLECTION
 
-async def add_user(user_id, username=None, first_name=None, last_name=None, source=None, status="pending"):
+async def add_user(user_id, username=None, first_name=None, last_name=None, source=None, status="pending", city=None):
     """
     Добавление нового пользователя в базу данных или обновление существующего
     
@@ -18,6 +18,7 @@ async def add_user(user_id, username=None, first_name=None, last_name=None, sour
         last_name (str, optional): Фамилия пользователя
         source (str, optional): Источник, откуда пришел пользователь
         status (str, optional): Статус пользователя (pending, active, blocked)
+        city (str, optional): Город проживания пользователя
         
     Returns:
         dict: Данные добавленного/обновленного пользователя
@@ -50,6 +51,10 @@ async def add_user(user_id, username=None, first_name=None, last_name=None, sour
         if not existing_user.get("source") and source:
             update_data["$set"]["source"] = source
             
+        # Если город не был указан ранее и указан сейчас
+        if not existing_user.get("city") and city:
+            update_data["$set"]["city"] = city
+            
         await collection.update_one({"user_id": user_id}, update_data)
         updated_user = await collection.find_one({"user_id": user_id})
         logging.info(f"Пользователь обновлен: {user_id}")
@@ -67,6 +72,10 @@ async def add_user(user_id, username=None, first_name=None, last_name=None, sour
             "updated_at": now
         }
         
+        # Добавляем город, если он указан
+        if city:
+            user_data["city"] = city
+            
         if status == "active":
             user_data["activated_at"] = now
             

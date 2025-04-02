@@ -6,13 +6,19 @@ import logging
 from datetime import datetime
 from aiogram import Dispatcher, types
 from aiogram.dispatcher.filters import CommandStart
+from aiogram.dispatcher import FSMContext
 
 from bot.database import add_user, update_user
 from bot.handlers.join_request_handlers import pending_approvals, approve_join_request
+from bot.handlers.city_handlers import ask_city
 
-async def start_cmd(message: types.Message):
+async def start_cmd(message: types.Message, state: FSMContext):
     """
     Обработчик команды /start
+    
+    Args:
+        message (types.Message): Сообщение пользователя
+        state (FSMContext): Состояние FSM
     """
     user = message.from_user
     
@@ -33,10 +39,20 @@ async def start_cmd(message: types.Message):
         approved = await approve_join_request(user.id)
         
         if approved:
+            # Отправляем приветственное сообщение
+            from bot.config.config import DEFAULT_WELCOME_MESSAGE
+            from bot.services.notifications import send_welcome_message
+            
+            await send_welcome_message(user.id, DEFAULT_WELCOME_MESSAGE)
+            
+            # Подтверждаем одобрение
             await message.answer(
-                f"Спасибо, {user.first_name}! Ваш запрос на вступление в канал одобрен.\n\n"
-                "Теперь вы будете получать все уведомления от нашего бота."
+                f"Спасибо, {user.first_name}! Ваш запрос на вступление в канал одобрен."
             )
+            
+            # Запрашиваем город пользователя
+            await ask_city(message, state)
+            
             logging.info(f"Пользователь {user.id} запустил бота, запрос на вступление одобрен")
             return
     
