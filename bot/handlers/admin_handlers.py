@@ -19,6 +19,7 @@ from bot.database import (
 )
 from bot.services.invite_links import generate_invite_link
 from bot.services.notifications import send_broadcast, schedule_broadcast
+from bot.utils.statistics import send_statistics_excel, send_active_users_statistics_excel
 
 class BroadcastStates(StatesGroup):
     """
@@ -90,7 +91,53 @@ async def show_statistics(message: types.Message):
     
     text += f"\n*Всего активных ссылок:* {len(invite_links)}\n"
     
-    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
+    # Создаем инлайн-клавиатуру с кнопкой для Excel-файла
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("📊 Получить EXCEL файл", callback_data="get_excel_stats"))
+    
+    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN, reply_markup=keyboard)
+
+async def process_excel_stats_request(callback_query: types.CallbackQuery):
+    """
+    Обрабатывает запрос на получение Excel-файла со статистикой
+    """
+    await callback_query.answer()
+    
+    # Создаем клавиатуру с выбором типа отчета
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("📊 Все пользователи (может занять время)", callback_data="get_excel_all"))
+    keyboard.add(types.InlineKeyboardButton("📊 Только активные пользователи", callback_data="get_excel_active"))
+    
+    # Отправляем сообщение о выборе типа отчета с учетом большой аудитории
+    await callback_query.message.answer(
+        "Выберите тип отчета для выгрузки. Обратите внимание, что в базе около 6500 пользователей, "
+        "поэтому формирование полного отчета может занять продолжительное время:", 
+        reply_markup=keyboard
+    )
+
+async def process_excel_all_users(callback_query: types.CallbackQuery):
+    """
+    Обрабатывает запрос на получение Excel-файла со статистикой всех пользователей
+    """
+    await callback_query.answer()
+    
+    # Отправляем сообщение о начале генерации файла для всех пользователей
+    await callback_query.message.answer(
+        "⏳ Начинаю подготовку Excel-файла со статистикой всех пользователей. "
+        "Это может занять некоторое время, пожалуйста, подождите..."
+    )
+    
+    # Отправляем Excel-файл
+    await send_statistics_excel(callback_query.message)
+
+async def process_excel_active_users(callback_query: types.CallbackQuery):
+    """
+    Обрабатывает запрос на получение Excel-файла со статистикой только активных пользователей
+    """
+    await callback_query.answer()
+    
+    # Отправляем Excel-файл только с активными пользователями
+    await send_active_users_statistics_excel(callback_query.message)
 
 async def create_invite_link_cmd(message: types.Message):
     """
@@ -909,4 +956,9 @@ def register_admin_handlers(dp: Dispatcher):
                                       lambda c: c.data.startswith("schedule_target_") and not c.data.startswith("schedule_target_page_") and not c.data.startswith("schedule_target_switch_"), 
                                       state=BroadcastStates.waiting_for_scheduled_target)
     dp.register_message_handler(process_schedule_time, admin_filter, state=BroadcastStates.waiting_for_schedule_time)
-    dp.register_message_handler(process_schedule_confirmation, admin_filter, state=BroadcastStates.waiting_for_schedule_confirmation) 
+    dp.register_message_handler(process_schedule_confirmation, admin_filter, state=BroadcastStates.waiting_for_schedule_confirmation)
+    
+    # Обработчик для запроса Excel-файла со статистикой
+    dp.register_callback_query_handler(process_excel_stats_request, admin_filter, Text(equals="get_excel_stats"), state="*")
+    dp.register_callback_query_handler(process_excel_all_users, admin_filter, Text(equals="get_excel_all"), state="*")
+    dp.register_callback_query_handler(process_excel_active_users, admin_filter, Text(equals="get_excel_active"), state="*") 
