@@ -1,0 +1,15 @@
+[Unit]
+Description=Arctic Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/arctic-bot
+Environment=PYTHONPATH=/root/arctic-bot
+ExecStart=/root/arctic-bot/venv/bin/python3.10 -m bot.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 
