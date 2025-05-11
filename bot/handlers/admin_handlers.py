@@ -212,7 +212,7 @@ async def process_invite_link_expire_date(message: types.Message, state: FSMCont
         await message.answer("Пожалуйста, введите число. Попробуйте еще раз:")
     except Exception as e:
         logging.error(f"Ошибка при создании пригласительной ссылки: {e}")
-        await message.answer(f"Произошла ошибка при создании ссылки: {str(e)}")
+        await message.answer(f"Произошла ошибка при создании ссылки: {str(e)}. Попробуйте еще раз.")
         await state.finish()  # Завершаем состояние в случае ошибки
 
 async def create_broadcast_cmd(message: types.Message):
