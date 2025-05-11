@@ -56,7 +56,7 @@ async def process_join_request(join_request: ChatJoinRequest):
         bot_username = (await bot.get_me()).username
         
         keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("🔄 Перейти к боту", url=f"https://t.me/{bot_username}?start=join"))
+        keyboard.add(InlineKeyboardButton("Вступить в канал", url=f"https://t.me/{bot_username}?start=join"))
         
         # Отправляем сообщение с просьбой запустить бота
         try:

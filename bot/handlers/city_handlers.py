@@ -9,6 +9,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
 
 from bot.database import update_user
+from bot.utils.menu import get_main_menu
 
 # Определяем состояния для FSM
 class CityForm(StatesGroup):
@@ -84,7 +85,7 @@ async def process_city(message: types.Message, state: FSMContext):
     await message.answer(
         f"Спасибо! Мы сохранили информацию о вашем городе ({city}).\n\n"
         "Теперь вы будете получать все уведомления от нашего бота.",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_main_menu()
     )
     logging.info(f"Пользователь {user_id} указал город: {city}")
 
