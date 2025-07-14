@@ -44,7 +44,14 @@ async def start_cmd(message: types.Message, state: FSMContext):
             from bot.services.notifications import send_welcome_message
             await send_welcome_message(user.id, DEFAULT_WELCOME_MESSAGE)
             await message.answer(
-                f"Спасибо, {user.first_name}! Ваш запрос на вступление в канал одобрен.",
+                (
+                    "Добро пожаловать в закрытый Telegram-канал Arctic Trucks Россия.\n"
+                    "Сообщество для тех, кто интересуется внедорожниками, тюнингом и экстремальным бездорожьем.\n\n"
+                    "В этом канале публикуется информация:\n"
+                    "• об автомобилях Arctic Trucks\n"
+                    "• внедорожном оборудовании\n"
+                    "• акциях и специальных предложениях"
+                ),
                 reply_markup=get_main_menu()
             )
             ikb = InlineKeyboardMarkup().add(InlineKeyboardButton('Указать город', callback_data='set_city'))

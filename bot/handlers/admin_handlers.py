@@ -763,7 +763,7 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
         target_description = f"пользователям из источника '{source}'"
         logging.info(f"Выбрана целевая аудитория для запланированной рассылки: пользователи из источника '{source}'")
     elif target_data.startswith("schedule_target_city_"):
-        city = target_data[20:]  # Вырезаем префикс "schedule_target_city_"
+        city = target_data[21:]  # Вырезаем префикс "schedule_target_city_"
         target_filter = {"city": city}
         target_description = f"пользователям из города '{city}'"
         logging.info(f"Выбрана целевая аудитория для запланированной рассылки: пользователи из города '{city}'")
@@ -792,7 +792,9 @@ async def process_scheduled_broadcast_target(callback_query: types.CallbackQuery
     await callback_query.message.answer(
         f"Вы выбрали отправку сообщения {target_description} (всего {len(users)} активных пользователей).\n\n"
         "Теперь укажите дату и время для отправки рассылки в формате ДД.ММ.ГГГГ ЧЧ:ММ\n"
-        "Например: 25.12.2023 15:30"
+        "*ВНИМАНИЕ! Время указывается обязательно по московскому времени (МСК).*\n"
+        "Например: 25.12.2023 15:30",
+        parse_mode=types.ParseMode.MARKDOWN
     )
     
     await BroadcastStates.waiting_for_schedule_time.set()
