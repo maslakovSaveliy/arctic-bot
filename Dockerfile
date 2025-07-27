@@ -20,12 +20,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY bot/ ./bot/
 COPY .env .
 
-# Создаем директорию для логов
-RUN mkdir -p /app/logs
-
 # Создаем пользователя для безопасности
-RUN useradd --create-home --shell /bin/bash botuser && \
+RUN useradd --create-home --shell /bin/bash botuser
+
+# Создаем директорию для логов и устанавливаем права
+RUN mkdir -p /app/logs && \
     chown -R botuser:botuser /app
+
 USER botuser
 
 # Устанавливаем переменные окружения

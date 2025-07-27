@@ -45,7 +45,7 @@ services:
       - SMTP_TO_EMAIL=${SMTP_TO_EMAIL}
       - SMTP_SUBJECT=${SMTP_SUBJECT}
     volumes:
-      - ./logs:/app/logs
+      - ./logs:/app/logs:rw
     networks:
       - arctic-bot-network
     healthcheck:
