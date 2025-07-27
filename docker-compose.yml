@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # MongoDB сервис
+  mongodb:
+    image: mongo:6.0
+    container_name: arctic-bot-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB_NAME:-telegram_bot}
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    ports:
+      - "27017:27017"
+    networks:
+      - arctic-bot-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Telegram бот
+  arctic-bot:
+    build: .
+    container_name: arctic-bot
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-password}@mongodb:27017/${MONGODB_DB_NAME:-telegram_bot}?authSource=admin
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - CHANNEL_ID=${CHANNEL_ID}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - DEBUG=${DEBUG:-False}
+      - DEFAULT_WELCOME_MESSAGE=${DEFAULT_WELCOME_MESSAGE}
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_TO_EMAIL=${SMTP_TO_EMAIL}
+      - SMTP_SUBJECT=${SMTP_SUBJECT}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - arctic-bot-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx для проксирования (опционально)
+  nginx:
+    image: nginx:alpine
+    container_name: arctic-bot-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - arctic-bot
+    networks:
+      - arctic-bot-network
+    profiles:
+      - production
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  arctic-bot-network:
+    driver: bridge 
