@@ -13,7 +13,7 @@ import pytz
 from bot.database.db import get_db
 from bot.config.config import BROADCASTS_COLLECTION
 from bot.services.notifications import send_broadcast
-from bot.handlers.join_request_handlers import clean_old_pending_approvals
+# Убран импорт clean_old_pending_approvals - функция удалена вместе с join_request_handlers
 
 # Глобальная переменная для хранения планировщика
 _scheduler = None

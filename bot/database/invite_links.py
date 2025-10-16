@@ -3,21 +3,20 @@
 """
 
 import logging
+import uuid
 from datetime import datetime
 from bot.database.db import get_db
-from bot.config.config import INVITE_LINKS_COLLECTION
+from bot.config.config import INVITE_LINKS_COLLECTION, CHANNEL_USERNAME
 
-async def create_invite_link(link, source, created_by, description=None, max_uses=None, expires_at=None):
+async def create_invite_link(source, created_by, description=None, expire_date=None):
     """
-    Создание новой пригласительной ссылки
+    Создание новой пригласительной ссылки для открытого канала
     
     Args:
-        link (str): Пригласительная ссылка
         source (str): Источник ссылки (название рекламного канала, соцсети и т.д.)
         created_by (int): ID пользователя, создавшего ссылку
         description (str, optional): Описание ссылки
-        max_uses (int, optional): Максимальное количество использований
-        expires_at (datetime, optional): Дата истечения срока действия
+        expire_date (datetime, optional): Дата истечения срока действия
         
     Returns:
         dict: Данные созданной ссылки
@@ -27,13 +26,23 @@ async def create_invite_link(link, source, created_by, description=None, max_use
     
     now = datetime.utcnow()
     
+    # Генерируем уникальный ID для ссылки
+    link_id = str(uuid.uuid4())[:8]  # Короткий уникальный ID
+    
+    # Формируем ссылку с параметром start
+    if CHANNEL_USERNAME:
+        username = CHANNEL_USERNAME.lstrip('@')
+        invite_link = f"https://t.me/{username}?start=link_{link_id}"
+    else:
+        invite_link = f"https://t.me/your_channel?start=link_{link_id}"
+    
     link_data = {
-        "link": link,
+        "link_id": link_id,
+        "invite_link": invite_link,
         "source": source,
         "created_by": created_by,
         "description": description,
-        "max_uses": max_uses,
-        "expires_at": expires_at,
+        "expire_date": expire_date,
         "created_at": now,
         "updated_at": now,
         "uses_count": 0,
@@ -41,36 +50,36 @@ async def create_invite_link(link, source, created_by, description=None, max_use
     }
     
     result = await collection.insert_one(link_data)
-    logging.info(f"Создана новая пригласительная ссылка: {link} (источник: {source})")
+    logging.info(f"Создана новая пригласительная ссылка: {invite_link} (источник: {source})")
     return link_data
 
-async def get_invite_link(link):
+async def get_invite_link(link_id):
     """
-    Получение данных о пригласительной ссылке
+    Получение данных о пригласительной ссылке по ID
     
     Args:
-        link (str): Пригласительная ссылка
+        link_id (str): ID ссылки
         
     Returns:
         dict: Данные о ссылке или None, если ссылка не найдена
     """
     db = get_db()
     collection = db[INVITE_LINKS_COLLECTION]
-    return await collection.find_one({"link": link})
+    return await collection.find_one({"link_id": link_id})
 
-async def get_source_by_link(link):
+async def get_source_by_link(link_id):
     """
-    Получение источника по пригласительной ссылке
+    Получение источника по ID ссылки и увеличение счетчика использований
     
     Args:
-        link (str): Пригласительная ссылка
+        link_id (str): ID ссылки
         
     Returns:
         str: Источник ссылки или None, если ссылка не найдена
     """
     db = get_db()
     collection = db[INVITE_LINKS_COLLECTION]
-    link_data = await collection.find_one({"link": link})
+    link_data = await collection.find_one({"link_id": link_id})
     
     if link_data:
         # Увеличиваем счетчик использований
@@ -81,30 +90,6 @@ async def get_source_by_link(link):
         return link_data.get("source")
     
     return None
-
-async def update_invite_link(link, update_data):
-    """
-    Обновление данных о пригласительной ссылке
-    
-    Args:
-        link (str): Пригласительная ссылка
-        update_data (dict): Данные для обновления
-        
-    Returns:
-        bool: True если обновление выполнено успешно, иначе False
-    """
-    db = get_db()
-    collection = db[INVITE_LINKS_COLLECTION]
-    
-    # Добавляем дату обновления
-    update_data["updated_at"] = datetime.utcnow()
-    
-    result = await collection.update_one(
-        {"link": link},
-        {"$set": update_data}
-    )
-    
-    return result.modified_count > 0
 
 async def get_all_invite_links(is_active=None, source=None, limit=None, skip=0):
     """
@@ -133,4 +118,4 @@ async def get_all_invite_links(is_active=None, source=None, limit=None, skip=0):
     if limit:
         cursor = cursor.limit(limit)
     
-    return await cursor.to_list(length=None) 
+    return await cursor.to_list(length=None)

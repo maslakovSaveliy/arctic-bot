@@ -5,13 +5,11 @@
 import logging
 from datetime import datetime
 from aiogram import Dispatcher, types
-from aiogram.dispatcher.filters import CommandStart
+from aiogram.dispatcher.filters import CommandStart, Command
 from aiogram.dispatcher import FSMContext
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.database import add_user, update_user
-from bot.handlers.join_request_handlers import pending_approvals, approve_join_request
-from bot.handlers.city_handlers import ask_city
 from bot.utils.send_email import send_consultation_email
 from bot.utils.menu import get_main_menu
 
@@ -30,50 +28,58 @@ async def start_cmd(message: types.Message, state: FSMContext):
         user_id=user.id,
         username=user.username,
         first_name=user.first_name,
-        last_name=user.last_name
+        last_name=user.last_name,
+        status="active"  # Пользователи открытого канала сразу активны
     )
     
     # Обновляем время последнего взаимодействия
     await update_user(user.id, {"last_interaction": datetime.utcnow()})
     
-    # Проверяем, есть ли ожидающий запрос на вступление
-    if user.id in pending_approvals:
-        approved = await approve_join_request(user.id)
-        if approved:
-            from bot.config.config import DEFAULT_WELCOME_MESSAGE
-            from bot.services.notifications import send_welcome_message
-            await send_welcome_message(user.id, DEFAULT_WELCOME_MESSAGE)
-            await message.answer(
-                (
-                    "Добро пожаловать в закрытый Telegram-канал Arctic Trucks Россия.\n"
-                    "Сообщество для тех, кто интересуется внедорожниками, тюнингом и экстремальным бездорожьем.\n\n"
-                    "В этом канале публикуется информация:\n"
-                    "• об автомобилях Arctic Trucks\n"
-                    "• внедорожном оборудовании\n"
-                    "• акциях и специальных предложениях"
-                ),
-                reply_markup=get_main_menu()
-            )
-            ikb = InlineKeyboardMarkup().add(InlineKeyboardButton('Указать город', callback_data='set_city'))
-            await message.answer(
-                "Укажите ваш город, если хотите получать более релевантную информацию.",
-                reply_markup=ikb
-            )
-            logging.info(f"Пользователь {user.id} запустил бота, запрос на вступление одобрен")
-            return
-    
-    # Проверяем аргументы команды
+    # Проверяем аргументы команды для определения источника
     args = message.get_args()
-    if args == "join":
-        await message.answer(
-            f"{user.first_name}, если у вас есть ожидающий запрос на вступление в канал, "
-            "он будет автоматически одобрен. Если запрос не был одобрен, "
-            "возможно, вы еще не отправили его или он был обработан ранее."
-        )
-        return
+    logging.info(f"Пользователь {user.id} запустил бота с аргументами: '{args}'")
+    source = None
+    if args and args.startswith('link_'):
+        link_id = args.replace('link_', '')
+        logging.info(f"Определен link_id: {link_id}")
+        from bot.database import get_source_by_link
+        source = await get_source_by_link(link_id)
+        logging.info(f"Получен источник: {source}")
+        if source:
+            # Обновляем источник пользователя
+            await update_user(user.id, {"source": source})
+            logging.info(f"Пользователь {user.id} пришел по ссылке с источником: {source}")
+        else:
+            logging.warning(f"Источник не найден для link_id: {link_id}")
+    else:
+        logging.info(f"Пользователь {user.id} запустил бота без параметра link_")
     
-    # Стандартное приветствие, если нет ожидающего запроса или не удалось его одобрить
-    await message.answer("Меню:", reply_markup=get_main_menu())
+    # Отправляем приветственное сообщение
+    from bot.config.config import CHANNEL_USERNAME
+    
+    welcome_text = f"""👋 Добро пожаловать в официальный Telegram-бот Arctic Trucks Россия.
+
+Здесь мы рассказываем обо всём, что связано с автомобилями Arctic Trucks — техникой, которая создана для самых сложных дорог и условий.
+
+Arctic Trucks выбирают:
+* для личных путешествий и экспедиций;
+* для работы в суровом климате и на тяжёлом бездорожье;
+* для геологоразведки, добычи нефти и газа, строительства и выездов в удалённые регионы.
+
+🚙 Arctic Trucks — это проходимость, надёжность и уверенность там, где заканчиваются дороги.
+
+📢 Подписывайтесь на наш канал: {CHANNEL_USERNAME}"""
+
+    await message.answer(welcome_text, reply_markup=get_main_menu())
+    
+    # Предложение указать город
+    city_keyboard = InlineKeyboardMarkup()
+    city_keyboard.add(InlineKeyboardButton('🏙️ Указать город', callback_data='set_city'))
+    
+    await message.answer(
+        "💡 Из какого города или региона Вы с нами? Нам важно понимать из каких уголков России и мира интересуются Arctic Trucks",
+        reply_markup=city_keyboard
+    )
 
 async def help_cmd(message: types.Message):
     """
@@ -83,9 +89,9 @@ async def help_cmd(message: types.Message):
     await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
     
     text = (
-        "Я бот для управления приватным каналом. Вот что я умею:\n\n"
-        "- Автоматически обрабатывать запросы на вступление в канал\n"
-        "- Отправлять уведомления о новых материалах\n\n"
+        "Я бот для управления открытым каналом. Вот что я умею:\n\n"
+        "- Отправлять уведомления о новых материалах\n"
+        "- Предоставлять консультации\n\n"
         "Доступные команды:\n"
         "/start - Начать взаимодействие с ботом\n"
         "/help - Показать это сообщение\n"
@@ -102,9 +108,8 @@ async def about_cmd(message: types.Message):
     await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
     
     text = (
-        "Это приватный канал с эксклюзивным контентом.\n\n"
-        "Для получения доступа к каналу вам необходимо перейти по пригласительной ссылке "
-        "и ваша заявка будет рассмотрена администраторами."
+        "Это открытый канал с эксклюзивным контентом.\n\n"
+        "Вы можете подписаться на канал и получать уведомления о новых материалах."
     )
     
     await message.answer(text)
@@ -115,13 +120,19 @@ async def any_message_handler(message: types.Message):
     """
     await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
     
-    if message.from_user.id in pending_approvals:
-        await message.answer(
-            "Чтобы одобрить ваш запрос на вступление в канал, "
-            "пожалуйста, отправьте команду /start."
-        )
+    # Убрана логика проверки заявок на вступление для открытого канала
     
-    # Не отвечаем на другие сообщения
+    # Обрабатываем текстовые сообщения
+    if message.text == "Консультация":
+        await message.answer(
+            "Для получения консультации поделитесь своим номером телефона, нажав кнопку 'Консультация' в меню.",
+            reply_markup=get_main_menu()
+        )
+    else:
+        await message.answer(
+            "Извините, я не понимаю эту команду. Используйте кнопки меню для навигации.",
+            reply_markup=get_main_menu()
+        )
 
 async def contact_handler(message: types.Message):
     """
@@ -130,15 +141,37 @@ async def contact_handler(message: types.Message):
     if message.contact and message.contact.phone_number:
         phone = message.contact.phone_number
         user_id = message.from_user.id
+        user_name = message.from_user.first_name
+        if message.from_user.last_name:
+            user_name += f" {message.from_user.last_name}"
+        
+        # Получаем город пользователя из базы данных
+        from bot.database import get_user
+        user_data = await get_user(user_id)
+        city = user_data.get("city") if user_data else None
+        
         # Сохраняем номер телефона в базе
         await update_user(user_id, {"phone": phone})
-        # Отправляем email
-        send_consultation_email(phone)
-        # Уведомляем пользователя
-        await message.answer(
-            "Спасибо! Ваш номер телефона отправлен консультанту. Скоро с вами свяжутся.",
-            reply_markup=get_main_menu()
-        )
+        # Отправляем email (синхронная функция)
+        try:
+            result = send_consultation_email(phone, user_name, city)
+            if result:
+                # Уведомляем пользователя
+                await message.answer(
+                    "Спасибо! Ваш номер телефона отправлен консультанту. Скоро с вами свяжутся.",
+                    reply_markup=get_main_menu()
+                )
+            else:
+                await message.answer(
+                    "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
+                    reply_markup=get_main_menu()
+                )
+        except Exception as e:
+            logging.error(f"Ошибка при отправке email с номером {phone}: {e}")
+            await message.answer(
+                "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
+                reply_markup=get_main_menu()
+            )
     else:
         await message.answer(
             "Не удалось получить номер телефона. Пожалуйста, попробуйте ещё раз.",
@@ -158,10 +191,11 @@ def register_user_handlers(dp: Dispatcher):
         dp (Dispatcher): Dispatcher объект
     """
     dp.register_message_handler(start_cmd, CommandStart(), state="*")
-    dp.register_message_handler(help_cmd, commands=["help"], state="*")
-    dp.register_message_handler(about_cmd, commands=["about"], state="*")
+    dp.register_message_handler(help_cmd, Command("help"), state="*")
+    dp.register_message_handler(about_cmd, Command("about"), state="*")
     
     # Обработчик для всех текстовых сообщений (без приоритета)
     dp.register_message_handler(any_message_handler, content_types=types.ContentTypes.TEXT, state="*")
     dp.register_message_handler(contact_handler, content_types=ContentType.CONTACT, state="*")
     dp.register_callback_query_handler(set_city_callback_handler, lambda c: c.data == 'set_city', state="*")
+    

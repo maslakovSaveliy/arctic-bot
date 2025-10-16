@@ -14,12 +14,9 @@ import pytz
 from bot.config.config import ADMIN_USER_IDS
 from bot.database import (
     get_all_users, 
-    get_users_by_filter, 
-    get_all_invite_links
+    get_users_by_filter
 )
-from bot.services.invite_links import generate_invite_link
 from bot.services.notifications import send_broadcast, schedule_broadcast
-from bot.utils.statistics import send_statistics_excel, send_active_users_statistics_excel
 
 class BroadcastStates(StatesGroup):
     """
@@ -35,13 +32,6 @@ class BroadcastStates(StatesGroup):
     waiting_for_schedule_time = State()
     waiting_for_schedule_confirmation = State()
 
-class InviteLinkStates(StatesGroup):
-    """
-    Состояния для FSM при создании пригласительной ссылки
-    """
-    waiting_for_source = State()
-    waiting_for_description = State()
-    waiting_for_expire_date = State()
 
 async def admin_start(message: types.Message):
     """
@@ -50,7 +40,6 @@ async def admin_start(message: types.Message):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     buttons = [
         "📊 Статистика",
-        "🔗 Создать ссылку",
         "📨 Создать рассылку",
         "📅 Запланировать рассылку"
     ]
@@ -63,157 +52,46 @@ async def admin_start(message: types.Message):
 
 async def show_statistics(message: types.Message):
     """
-    Показывает статистику по пользователям и источникам
+    Показывает статистику по пользователям и городам
     """
+    from bot.config.config import CHANNEL_ID
+    
     # Получаем всех пользователей
     all_users = await get_all_users()
     active_users = await get_all_users(status="active")
     
-    # Группируем пользователей по источникам
-    sources = {}
+    # Получаем количество подписчиков канала
+    try:
+        chat_member_count = await message.bot.get_chat_member_count(CHANNEL_ID)
+    except Exception as e:
+        logging.error(f"Ошибка при получении количества подписчиков канала: {e}")
+        chat_member_count = "Недоступно"
+    
+    # Группируем пользователей по городам
+    cities = {}
     for user in active_users:
-        source = user.get("source", "Неизвестно")
-        if source not in sources:
-            sources[source] = 0
-        sources[source] += 1
+        city = user.get("city", "Не указан")
+        if city not in cities:
+            cities[city] = 0
+        cities[city] += 1
+    
+    # Сортируем города по количеству пользователей
+    sorted_cities = sorted(cities.items(), key=lambda x: x[1], reverse=True)
     
     # Формируем текст сообщения
-    text = "📊 *Статистика*\n\n"
-    text += f"Всего пользователей: {len(all_users)}\n"
-    text += f"Активных пользователей: {len(active_users)}\n\n"
+    text = "📊 *Статистика Arctic Trucks*\n\n"
+    text += f"👥 *Подписчики канала:* {chat_member_count}\n"
+    text += f"🤖 *Пользователи бота:* {len(all_users)}\n"
+    text += f"✅ *Активные пользователи:* {len(active_users)}\n\n"
     
-    text += "*По источникам:*\n"
-    for source, count in sources.items():
-        text += f"- {source}: {count}\n"
+    text += "*📍 Статистика по городам:*\n"
+    for city, count in sorted_cities[:10]:  # Показываем топ-10 городов
+        text += f"• {city}: {count} чел.\n"
     
-    # Получаем все пригласительные ссылки
-    invite_links = await get_all_invite_links()
+    if len(sorted_cities) > 10:
+        text += f"\n... и еще {len(sorted_cities) - 10} городов"
     
-    text += f"\n*Всего активных ссылок:* {len(invite_links)}\n"
-    
-    # Создаем инлайн-клавиатуру с кнопкой для Excel-файла
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("📊 Получить EXCEL файл", callback_data="get_excel_stats"))
-    
-    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN, reply_markup=keyboard)
-
-async def process_excel_stats_request(callback_query: types.CallbackQuery):
-    """
-    Обрабатывает запрос на получение Excel-файла со статистикой
-    """
-    await callback_query.answer()
-    
-    # Создаем клавиатуру с выбором типа отчета
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("📊 Все пользователи (может занять время)", callback_data="get_excel_all"))
-    keyboard.add(types.InlineKeyboardButton("📊 Только активные пользователи", callback_data="get_excel_active"))
-    
-    # Отправляем сообщение о выборе типа отчета с учетом большой аудитории
-    await callback_query.message.answer(
-        "Выберите тип отчета для выгрузки. Обратите внимание, что в базе около 6500 пользователей, "
-        "поэтому формирование полного отчета может занять продолжительное время:", 
-        reply_markup=keyboard
-    )
-
-async def process_excel_all_users(callback_query: types.CallbackQuery):
-    """
-    Обрабатывает запрос на получение Excel-файла со статистикой всех пользователей
-    """
-    await callback_query.answer()
-    
-    # Отправляем сообщение о начале генерации файла для всех пользователей
-    await callback_query.message.answer(
-        "⏳ Начинаю подготовку Excel-файла со статистикой всех пользователей. "
-        "Это может занять некоторое время, пожалуйста, подождите..."
-    )
-    
-    # Отправляем Excel-файл
-    await send_statistics_excel(callback_query.message)
-
-async def process_excel_active_users(callback_query: types.CallbackQuery):
-    """
-    Обрабатывает запрос на получение Excel-файла со статистикой только активных пользователей
-    """
-    await callback_query.answer()
-    
-    # Отправляем Excel-файл только с активными пользователями
-    await send_active_users_statistics_excel(callback_query.message)
-
-async def create_invite_link_cmd(message: types.Message):
-    """
-    Начинает процесс создания пригласительной ссылки
-    """
-    await message.answer("Введите источник для новой пригласительной ссылки (например, 'Instagram', 'Facebook', 'Сайт' и т.д.):")
-    await InviteLinkStates.waiting_for_source.set()
-
-async def process_invite_link_source(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает ввод источника для пригласительной ссылки
-    """
-    async with state.proxy() as data:
-        data["source"] = message.text
-    
-    await message.answer("Введите описание для ссылки (или отправьте 'нет', если описание не требуется):")
-    await InviteLinkStates.waiting_for_description.set()
-
-async def process_invite_link_description(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает ввод описания для пригласительной ссылки
-    """
-    async with state.proxy() as data:
-        if message.text.lower() not in ["нет", "no", "-", "n"]:
-            data["description"] = message.text
-        else:
-            data["description"] = None
-    
-    await message.answer(
-        "Введите срок действия ссылки в днях (или отправьте '0', если ссылка не должна истекать):"
-    )
-    await InviteLinkStates.waiting_for_expire_date.set()
-
-async def process_invite_link_expire_date(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает ввод срока действия для пригласительной ссылки и генерирует ссылку
-    """
-    try:
-        days = int(message.text)
-        
-        async with state.proxy() as data:
-            if days > 0:
-                data["expire_date"] = datetime.now() + timedelta(days=days)
-            else:
-                data["expire_date"] = None
-        
-        # Генерируем ссылку без ограничения по количеству использований
-        link_data = await generate_invite_link(
-            bot=message.bot,
-            source=data["source"],
-            created_by=message.from_user.id,
-            expire_date=data.get("expire_date"),
-            member_limit=None,
-            description=data.get("description")
-        )
-        
-        # Формируем сообщение
-        text = "🔗 *Новая пригласительная ссылка создана:*\n\n"
-        text += f"Ссылка: {link_data['invite_link']}\n"
-        text += f"Источник: {link_data['source']}\n"
-        
-        if link_data.get("description"):
-            text += f"Описание: {link_data['description']}\n"
-        
-        if link_data.get("expires_at"):
-            text += f"Истекает: {link_data['expires_at']}\n"
-        
-        await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
-        await state.finish()
-    
-    except ValueError:
-        await message.answer("Пожалуйста, введите число. Попробуйте еще раз:")
-    except Exception as e:
-        logging.error(f"Ошибка при создании пригласительной ссылки: {e}")
-        await message.answer(f"Произошла ошибка при создании ссылки: {str(e)}. Попробуйте еще раз.")
-        await state.finish()  # Завершаем состояние в случае ошибки
+    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
 
 async def create_broadcast_cmd(message: types.Message):
     """
@@ -909,12 +787,6 @@ def register_admin_handlers(dp: Dispatcher):
     dp.register_message_handler(admin_start, admin_filter, commands=["admin"], state="*")
     dp.register_message_handler(show_statistics, admin_filter, Text(equals="📊 Статистика"), state="*")
     
-    # Обработчики для создания пригласительных ссылок
-    dp.register_message_handler(create_invite_link_cmd, admin_filter, Text(equals="🔗 Создать ссылку"), state="*")
-    dp.register_message_handler(process_invite_link_source, admin_filter, state=InviteLinkStates.waiting_for_source)
-    dp.register_message_handler(process_invite_link_description, admin_filter, state=InviteLinkStates.waiting_for_description)
-    dp.register_message_handler(process_invite_link_expire_date, admin_filter, state=InviteLinkStates.waiting_for_expire_date)
-    
     # Обработчики для создания рассылок
     dp.register_message_handler(create_broadcast_cmd, admin_filter, Text(equals="📨 Создать рассылку"), state="*")
     dp.register_message_handler(process_broadcast_message, admin_filter, state=BroadcastStates.waiting_for_message)
@@ -961,6 +833,3 @@ def register_admin_handlers(dp: Dispatcher):
     dp.register_message_handler(process_schedule_confirmation, admin_filter, state=BroadcastStates.waiting_for_schedule_confirmation)
     
     # Обработчик для запроса Excel-файла со статистикой
-    dp.register_callback_query_handler(process_excel_stats_request, admin_filter, Text(equals="get_excel_stats"), state="*")
-    dp.register_callback_query_handler(process_excel_all_users, admin_filter, Text(equals="get_excel_all"), state="*")
-    dp.register_callback_query_handler(process_excel_active_users, admin_filter, Text(equals="get_excel_active"), state="*") 

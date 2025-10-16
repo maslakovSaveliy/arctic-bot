@@ -4,7 +4,6 @@
 
 from bot.handlers.admin_handlers import register_admin_handlers
 from bot.handlers.user_handlers import register_user_handlers
-from bot.handlers.join_request_handlers import register_join_request_handlers
 from bot.handlers.error_handlers import register_error_handlers
 from bot.handlers.city_handlers import register_city_handlers
 
@@ -19,7 +18,6 @@ def register_all_handlers(dp):
         register_city_handlers,  # Регистрируем первым, чтобы обработчик состояний имел приоритет
         register_admin_handlers,
         register_user_handlers,
-        register_join_request_handlers,
         register_error_handlers
     ]
     

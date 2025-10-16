@@ -13,7 +13,7 @@ from bot.handlers import register_all_handlers
 from bot.database import init_db, close_db_connection
 from bot.utils.logging_setup import setup_logging, clean_old_logs
 from bot.utils.scheduler import setup_scheduler, check_scheduled_broadcasts, migrate_old_broadcasts, create_broadcast_check_job
-from bot.handlers.join_request_handlers import clean_old_pending_approvals
+# Убран импорт clean_old_pending_approvals - функция удалена вместе с join_request_handlers
 
 # Настройка логирования
 setup_logging(log_level=logging.DEBUG if DEBUG else logging.INFO)
@@ -63,14 +63,7 @@ async def on_startup(dispatcher):
     )
     logging.info("Планировщик рассылок добавлен с интервалом 1 минута")
     
-    # Добавляем задачу для очистки старых ожидающих запросов на вступление
-    scheduler.add_job(
-        clean_old_pending_approvals,
-        'interval',
-        hours=24,  # Запускаем раз в сутки
-        id='clean_approvals',
-        replace_existing=True
-    )
+    # Убрана задача очистки заявок на вступление - не нужна для открытого канала
     
     # Добавляем задачу для очистки старых файлов логов
     scheduler.add_job(
