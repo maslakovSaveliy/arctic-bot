@@ -7,11 +7,28 @@ from datetime import datetime
 from aiogram import Dispatcher, types
 from aiogram.dispatcher.filters import CommandStart, Command
 from aiogram.dispatcher import FSMContext
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ContentType,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
 from bot.database import add_user, update_user
 from bot.utils.send_email import send_consultation_email
 from bot.utils.menu import get_main_menu
+
+
+class ConsultationForm(StatesGroup):
+    """
+    Состояния для сценария консультации (заявка менеджеру).
+    """
+
+    waiting_for_question = State()
+    waiting_for_phone = State()
+    waiting_for_call_time = State()
 
 async def start_cmd(message: types.Message, state: FSMContext):
     """
@@ -59,16 +76,9 @@ async def start_cmd(message: types.Message, state: FSMContext):
     
     welcome_text = f"""👋 Добро пожаловать в официальный Telegram-бот Arctic Trucks Россия.
 
-Здесь мы рассказываем обо всём, что связано с автомобилями Arctic Trucks — техникой, которая создана для самых сложных дорог и условий.
+📢 Подписывайтесь на наш канал: https://t.me/arctictrucksru
 
-Arctic Trucks выбирают:
-* для личных путешествий и экспедиций;
-* для работы в суровом климате и на тяжёлом бездорожье;
-* для геологоразведки, добычи нефти и газа, строительства и выездов в удалённые регионы.
-
-🚙 Arctic Trucks — это проходимость, надёжность и уверенность там, где заканчиваются дороги.
-
-📢 Подписывайтесь на наш канал: {CHANNEL_USERNAME}"""
+Здесь мы рассказываем обо всём, что связано с автомобилями Arctic Trucks — техникой, которая создана для самых сложных дорог и условий."""
 
     await message.answer(welcome_text, reply_markup=get_main_menu())
     
@@ -77,7 +87,7 @@ Arctic Trucks выбирают:
     city_keyboard.add(InlineKeyboardButton('🏙️ Указать город', callback_data='set_city'))
     
     await message.answer(
-        "💡 Из какого города или региона Вы с нами? Нам важно понимать из каких уголков России и мира интересуются Arctic Trucks",
+        "💡 Из какого города Вы с нами? Нам важно знать, из каких уголков России и мира наши подписчики",
         reply_markup=city_keyboard
     )
 
@@ -114,25 +124,169 @@ async def about_cmd(message: types.Message):
     
     await message.answer(text)
 
-async def any_message_handler(message: types.Message):
+async def available_cmd(message: types.Message) -> None:
+    """
+    Обработчик команды /available
+    """
+    await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
+    await message.answer(
+        "👉 Хотите узнать больше о моделях в наличии? Переходите на сайт https://arctictrucks.ru/auto-in-stock/"
+    )
+
+async def shop_cmd(message: types.Message) -> None:
+    """
+    Обработчик команды /shop
+    """
+    await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
+    await message.answer(
+        "👉 Полезное внедорожное оборудование и запчасти! Подробности https://arctictrucks.ru/equip/"
+    )
+
+async def configurator_cmd(message: types.Message) -> None:
+    """
+    Обработчик команды /configurator
+    """
+    await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
+    await message.answer(
+        "👉 Хотите собрать свой Arctic Trucks под индивидуальные задачи? Переходите на сайт https://arctictrucks.ru/configurator/"
+    )
+
+
+async def start_consultation_flow(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
+    """
+    Запускает сценарий консультации: задает первый вопрос и переводит
+    пользователя в состояние ожидания текста вопроса.
+    """
+    # Сбрасываем предыдущие состояния (например, выбор города)
+    await state.finish()
+    await ConsultationForm.waiting_for_question.set()
+
+    await message.answer(
+        "Привет! Если у вас есть вопросы или нужна помощь — напишите их здесь, мы обязательно ответим!"
+    )
+
+
+async def manager_cmd(message: types.Message, state: FSMContext) -> None:
+    """
+    Обработчик команды /manager
+    Переводит пользователя в сценарий оставления заявки на консультацию.
+    """
+    await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
+    await start_consultation_flow(message, state)
+
+
+async def any_message_handler(message: types.Message, state: FSMContext):
     """
     Обработчик любых сообщений для отслеживания активности пользователя
     """
     await update_user(message.from_user.id, {"last_interaction": datetime.utcnow()})
-    
+
     # Убрана логика проверки заявок на вступление для открытого канала
     
     # Обрабатываем текстовые сообщения
-    if message.text == "Консультация":
-        await message.answer(
-            "Для получения консультации поделитесь своим номером телефона, нажав кнопку 'Консультация' в меню.",
-            reply_markup=get_main_menu()
-        )
+    if message.text == "Получить консультацию":
+        await start_consultation_flow(message, state)
     else:
         await message.answer(
             "Извините, я не понимаю эту команду. Используйте кнопки меню для навигации.",
             reply_markup=get_main_menu()
         )
+
+
+async def consultation_question_handler(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
+    """
+    Обрабатывает ответ на первый вопрос (текст вопроса пользователя)
+    и задает второй вопрос о номере телефона.
+    """
+    async with state.proxy() as data:
+        data["question_text"] = message.text.strip()
+
+    await message.answer(
+        "Чтобы команда Арктик Тракс могла связаться с вами для консультации, вы можете оставить свой номер телефона"
+    )
+    await ConsultationForm.waiting_for_phone.set()
+
+
+async def consultation_phone_handler(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
+    """
+    Обрабатывает номер телефона (второй вопрос) и задает третий вопрос
+    про удобное время для звонка.
+    """
+    async with state.proxy() as data:
+        data["phone"] = message.text.strip()
+
+    await message.answer(
+        "Спасибо за ваш вопрос! Когда лучше позвонить? Можем прямо сейчас или в удобное время (укажите время)"
+    )
+    await ConsultationForm.waiting_for_call_time.set()
+
+
+async def consultation_call_time_handler(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
+    """
+    Обрабатывает удобное время для звонка (третий вопрос), формирует
+    и отправляет заявку на консультацию по email.
+    """
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
+    if message.from_user.last_name:
+        user_name += f" {message.from_user.last_name}"
+
+    async with state.proxy() as data:
+        question_text = data.get("question_text", "")
+        phone = data.get("phone", "")
+        call_time = message.text.strip()
+
+    # Получаем город пользователя из базы
+    from bot.database import get_user
+
+    user_data = await get_user(user_id)
+    city = user_data.get("city") if user_data else None
+
+    # Сохраняем номер телефона в базе
+    if phone:
+        await update_user(user_id, {"phone": phone})
+
+    # Отправляем письмо с учетом всех ответов
+    try:
+        result = send_consultation_email(
+            phone_number=phone,
+            user_name=user_name,
+            city=city,
+            question=question_text,
+            call_time=call_time,
+        )
+        if result:
+            await message.answer(
+                "Спасибо! Ваша заявка отправлена. Мы свяжемся с вами по указанному номеру.",
+                reply_markup=get_main_menu(),
+            )
+        else:
+            await message.answer(
+                "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
+                reply_markup=get_main_menu(),
+            )
+    except Exception as exc:
+        logging.error(
+            f"Ошибка при отправке email с заявкой (user_id={user_id}, phone={phone}): {exc}"
+        )
+        await message.answer(
+            "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
+            reply_markup=get_main_menu(),
+        )
+    finally:
+        await state.finish()
 
 async def contact_handler(message: types.Message):
     """
@@ -193,9 +347,34 @@ def register_user_handlers(dp: Dispatcher):
     dp.register_message_handler(start_cmd, CommandStart(), state="*")
     dp.register_message_handler(help_cmd, Command("help"), state="*")
     dp.register_message_handler(about_cmd, Command("about"), state="*")
-    
-    # Обработчик для всех текстовых сообщений (без приоритета)
-    dp.register_message_handler(any_message_handler, content_types=types.ContentTypes.TEXT, state="*")
+    dp.register_message_handler(available_cmd, Command("available"), state="*")
+    dp.register_message_handler(shop_cmd, Command("shop"), state="*")
+    dp.register_message_handler(configurator_cmd, Command("configurator"), state="*")
+    dp.register_message_handler(manager_cmd, Command("manager"), state="*")
+
+    # Обработчик для сценария консультации (FSM)
+    dp.register_message_handler(
+        consultation_question_handler,
+        state=ConsultationForm.waiting_for_question,
+        content_types=types.ContentTypes.TEXT,
+    )
+    dp.register_message_handler(
+        consultation_phone_handler,
+        state=ConsultationForm.waiting_for_phone,
+        content_types=types.ContentTypes.TEXT,
+    )
+    dp.register_message_handler(
+        consultation_call_time_handler,
+        state=ConsultationForm.waiting_for_call_time,
+        content_types=types.ContentTypes.TEXT,
+    )
+
+    # Обработчик для всех текстовых сообщений (fallback, только вне состояний FSM)
+    dp.register_message_handler(
+        any_message_handler,
+        content_types=types.ContentTypes.TEXT,
+        state=None,
+    )
     dp.register_message_handler(contact_handler, content_types=ContentType.CONTACT, state="*")
     dp.register_callback_query_handler(set_city_callback_handler, lambda c: c.data == 'set_city', state="*")
     
