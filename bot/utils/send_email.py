@@ -4,21 +4,21 @@ import logging
 from bot.config.config import SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_TO_EMAIL, SMTP_SUBJECT
 
 def send_consultation_email(
-    phone_number: str,
+    phone_number: str | None,
     user_name: str | None = None,
     city: str | None = None,
     question: str | None = None,
-    call_time: str | None = None,
+    contact_method: str | None = None,
 ) -> bool:
     """
     Отправляет письмо с информацией о консультации на рабочую почту.
 
     Args:
-        phone_number (str): Номер телефона пользователя
+        phone_number (str | None): Номер телефона пользователя
         user_name (str | None): Имя пользователя из Telegram
         city (str | None): Город пользователя
         question (str | None): Вопрос пользователя
-        call_time (str | None): Предпочтительное время для звонка
+        contact_method (str | None): Предпочтительный способ связи
 
     Returns:
         bool: True если письмо отправлено успешно, иначе False
@@ -36,15 +36,15 @@ def send_consultation_email(
         logging.error(f"SMTP_SUBJECT: {'✓' if SMTP_SUBJECT else '✗'}")
         return False
 
+    phone_display = phone_number.strip() if phone_number else "Не указан"
+
     # Формируем тело письма
-    body = "Квиз\n\n"
+    body = "ТГ Бот\n\n"
     body += f"Имя: {user_name if user_name else 'Не указано'}\n"
-    body += f"Контактный телефон: {phone_number}\n"
+    body += f"Контактный телефон: {phone_display}\n"
     body += f"Город: {city if city else 'Не указан'}\n"
     body += f"Вопрос: {question if question else 'Не указан'}\n"
-    body += (
-        f"Удобное время для звонка: {call_time if call_time else 'Не указано'}\n"
-    )
+    body += f"Способ связи: {contact_method if contact_method else 'Не указан'}\n"
     body += "Сообщение: Заявка на консультацию"
 
     msg = MIMEText(body)

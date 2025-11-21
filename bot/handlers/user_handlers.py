@@ -27,8 +27,12 @@ class ConsultationForm(StatesGroup):
     """
 
     waiting_for_question = State()
+    waiting_for_contact_choice = State()
     waiting_for_phone = State()
-    waiting_for_call_time = State()
+
+
+CONSULT_CONTACT_PHONE = "consult_contact_phone"
+CONSULT_CONTACT_CHAT = "consult_contact_chat"
 
 async def start_cmd(message: types.Message, state: FSMContext):
     """
@@ -165,7 +169,7 @@ async def start_consultation_flow(
     await ConsultationForm.waiting_for_question.set()
 
     await message.answer(
-        "Привет! Если у вас есть вопросы или нужна помощь — напишите их здесь, мы обязательно ответим!"
+        "👉 Привет! Если у вас есть вопросы или нужна помощь — напишите их здесь, мы обязательно ответим!"
     )
 
 
@@ -189,6 +193,15 @@ async def any_message_handler(message: types.Message, state: FSMContext):
     # Обрабатываем текстовые сообщения
     if message.text == "Получить консультацию":
         await start_consultation_flow(message, state)
+    elif message.text == "Arctic Trucks в наличии":
+        # Поведение соответствует команде /available
+        await available_cmd(message)
+    elif message.text == "Интернет-магазин":
+        # Поведение соответствует команде /shop
+        await shop_cmd(message)
+    elif message.text == "Конфигуратор":
+        # Поведение соответствует команде /configurator
+        await configurator_cmd(message)
     else:
         await message.answer(
             "Извините, я не понимаю эту команду. Используйте кнопки меню для навигации.",
@@ -207,10 +220,72 @@ async def consultation_question_handler(
     async with state.proxy() as data:
         data["question_text"] = message.text.strip()
 
-    await message.answer(
-        "Чтобы команда Арктик Тракс могла связаться с вами для консультации, вы можете оставить свой номер телефона"
+    contact_keyboard = InlineKeyboardMarkup()
+    contact_keyboard.add(
+        InlineKeyboardButton(
+            "Оставить номер телефона, и мы перезвоним.",
+            callback_data=CONSULT_CONTACT_PHONE,
+        )
     )
-    await ConsultationForm.waiting_for_phone.set()
+    contact_keyboard.add(
+        InlineKeyboardButton(
+            "Дождаться ответа оператора в чате.",
+            callback_data=CONSULT_CONTACT_CHAT,
+        )
+    )
+
+    await message.answer(
+        "👉 Как с вами связаться?",
+        reply_markup=contact_keyboard,
+    )
+    await ConsultationForm.waiting_for_contact_choice.set()
+
+
+async def consultation_contact_choice_handler(
+    callback_query: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """
+    Обрабатывает выбор способа связи.
+    """
+    await callback_query.answer()
+    choice = callback_query.data
+
+    if choice == CONSULT_CONTACT_PHONE:
+        async with state.proxy() as data:
+            data["contact_method"] = "Оставить номер телефона"
+
+        await callback_query.message.answer(
+            "Пожалуйста, введите номер телефона для обратного звонка."
+        )
+        await ConsultationForm.waiting_for_phone.set()
+        return
+
+    if choice == CONSULT_CONTACT_CHAT:
+        async with state.proxy() as data:
+            data["contact_method"] = "Ответ оператора в чате"
+
+        is_success = await _process_consultation_submission(
+            user=callback_query.from_user,
+            state=state,
+            phone=None,
+        )
+
+        if is_success:
+            await callback_query.message.answer(
+                "Хорошо, оператор скоро ответит вам в чате.",
+                reply_markup=get_main_menu(),
+            )
+        else:
+            await callback_query.message.answer(
+                "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
+                reply_markup=get_main_menu(),
+            )
+
+        await state.finish()
+        return
+
+    logging.warning(f"Неизвестный выбор способа связи: {choice}")
 
 
 async def consultation_phone_handler(
@@ -218,75 +293,70 @@ async def consultation_phone_handler(
     state: FSMContext,
 ) -> None:
     """
-    Обрабатывает номер телефона (второй вопрос) и задает третий вопрос
-    про удобное время для звонка.
+    Обрабатывает номер телефона пользователя и завершает заявку.
     """
     async with state.proxy() as data:
         data["phone"] = message.text.strip()
+    phone = message.text.strip()
 
-    await message.answer(
-        "Спасибо за ваш вопрос! Когда лучше позвонить? Можем прямо сейчас или в удобное время (укажите время)"
+    is_success = await _process_consultation_submission(
+        user=message.from_user,
+        state=state,
+        phone=phone,
     )
-    await ConsultationForm.waiting_for_call_time.set()
 
-
-async def consultation_call_time_handler(
-    message: types.Message,
-    state: FSMContext,
-) -> None:
-    """
-    Обрабатывает удобное время для звонка (третий вопрос), формирует
-    и отправляет заявку на консультацию по email.
-    """
-    user_id = message.from_user.id
-    user_name = message.from_user.first_name
-    if message.from_user.last_name:
-        user_name += f" {message.from_user.last_name}"
-
-    async with state.proxy() as data:
-        question_text = data.get("question_text", "")
-        phone = data.get("phone", "")
-        call_time = message.text.strip()
-
-    # Получаем город пользователя из базы
-    from bot.database import get_user
-
-    user_data = await get_user(user_id)
-    city = user_data.get("city") if user_data else None
-
-    # Сохраняем номер телефона в базе
-    if phone:
-        await update_user(user_id, {"phone": phone})
-
-    # Отправляем письмо с учетом всех ответов
-    try:
-        result = send_consultation_email(
-            phone_number=phone,
-            user_name=user_name,
-            city=city,
-            question=question_text,
-            call_time=call_time,
+    if is_success:
+        await message.answer(
+            "Спасибо! Ждите звонка от менеджера.",
+            reply_markup=get_main_menu(),
         )
-        if result:
-            await message.answer(
-                "Спасибо! Ваша заявка отправлена. Мы свяжемся с вами по указанному номеру.",
-                reply_markup=get_main_menu(),
-            )
-        else:
-            await message.answer(
-                "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
-                reply_markup=get_main_menu(),
-            )
-    except Exception as exc:
-        logging.error(
-            f"Ошибка при отправке email с заявкой (user_id={user_id}, phone={phone}): {exc}"
-        )
+    else:
         await message.answer(
             "Произошла ошибка при отправке заявки. Попробуйте позже или свяжитесь с нами другим способом.",
             reply_markup=get_main_menu(),
         )
-    finally:
-        await state.finish()
+
+    await state.finish()
+
+
+async def _process_consultation_submission(
+    user: types.User,
+    state: FSMContext,
+    phone: str | None,
+) -> bool:
+    """
+    Собирает данные пользователя и отправляет заявку по email.
+    """
+    async with state.proxy() as data:
+        question_text = data.get("question_text")
+        contact_method = data.get("contact_method")
+
+    # Получаем город пользователя из базы
+    from bot.database import get_user
+
+    user_data = await get_user(user.id)
+    city = user_data.get("city") if user_data else None
+
+    if phone:
+        await update_user(user.id, {"phone": phone})
+
+    user_name = user.first_name or ""
+    if user.last_name:
+        user_name = f"{user_name} {user.last_name}".strip()
+
+    try:
+        return send_consultation_email(
+            phone_number=phone,
+            user_name=user_name or None,
+            city=city,
+            question=question_text,
+            contact_method=contact_method,
+        )
+    except Exception as exc:
+        logging.error(
+            f"Ошибка при отправке email с заявкой (user_id={user.id}, phone={phone}): {exc}"
+        )
+        return False
 
 async def contact_handler(message: types.Message):
     """
@@ -308,7 +378,12 @@ async def contact_handler(message: types.Message):
         await update_user(user_id, {"phone": phone})
         # Отправляем email (синхронная функция)
         try:
-            result = send_consultation_email(phone, user_name, city)
+            result = send_consultation_email(
+                phone,
+                user_name,
+                city,
+                contact_method="Контакт отправлен через Telegram",
+            )
             if result:
                 # Уведомляем пользователя
                 await message.answer(
@@ -363,10 +438,10 @@ def register_user_handlers(dp: Dispatcher):
         state=ConsultationForm.waiting_for_phone,
         content_types=types.ContentTypes.TEXT,
     )
-    dp.register_message_handler(
-        consultation_call_time_handler,
-        state=ConsultationForm.waiting_for_call_time,
-        content_types=types.ContentTypes.TEXT,
+    dp.register_callback_query_handler(
+        consultation_contact_choice_handler,
+        lambda c: c.data in {CONSULT_CONTACT_PHONE, CONSULT_CONTACT_CHAT},
+        state=ConsultationForm.waiting_for_contact_choice,
     )
 
     # Обработчик для всех текстовых сообщений (fallback, только вне состояний FSM)
