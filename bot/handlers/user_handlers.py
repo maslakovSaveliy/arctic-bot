@@ -56,9 +56,17 @@ async def start_cmd(message: types.Message, state: FSMContext):
     # Обновляем время последнего взаимодействия
     await update_user(user.id, {"last_interaction": datetime.utcnow()})
     
-    # Проверяем аргументы команды для определения источника
+    # Проверяем аргументы команды для определения источника или конкурса
     args = message.get_args()
     logging.info(f"Пользователь {user.id} запустил бота с аргументами: '{args}'")
+
+    if args and args.startswith("contest_"):
+        contest_id = args.replace("contest_", "")
+        logging.info(f"Пользователь {user.id} переходит к конкурсу {contest_id}")
+        from bot.handlers.contest_handlers import start_contest_participation
+        await start_contest_participation(message, state, contest_id)
+        return
+
     source = None
     if args and args.startswith('link_'):
         link_id = args.replace('link_', '')
@@ -67,7 +75,6 @@ async def start_cmd(message: types.Message, state: FSMContext):
         source = await get_source_by_link(link_id)
         logging.info(f"Получен источник: {source}")
         if source:
-            # Обновляем источник пользователя
             await update_user(user.id, {"source": source})
             logging.info(f"Пользователь {user.id} пришел по ссылке с источником: {source}")
         else:

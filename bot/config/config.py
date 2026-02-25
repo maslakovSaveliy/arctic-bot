@@ -25,6 +25,12 @@ DEFAULT_WELCOME_MESSAGE = os.getenv(
 USERS_COLLECTION = "users"
 INVITE_LINKS_COLLECTION = "invite_links"
 BROADCASTS_COLLECTION = "broadcasts"
+CONTESTS_COLLECTION = "contests"
+CONTEST_PARTICIPANTS_COLLECTION = "contest_participants"
+
+# Антифрод
+MIN_ACCOUNT_AGE_DAYS = 0
+MAX_USER_ID = 7_000_000_000
 
 # SMTP конфигурация
 SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')

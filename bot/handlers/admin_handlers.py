@@ -41,7 +41,8 @@ async def admin_start(message: types.Message):
     buttons = [
         "📊 Статистика",
         "📨 Создать рассылку",
-        "📅 Запланировать рассылку"
+        "📅 Запланировать рассылку",
+        "🎯 Конкурсы"
     ]
     keyboard.add(*buttons)
     
