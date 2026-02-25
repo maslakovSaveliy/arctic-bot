@@ -329,17 +329,48 @@ async def contest_pick_winner_confirm(callback_query: types.CallbackQuery) -> No
     updated_contest = await get_contest(contest_id)
 
     winner_name = winner.get("first_name") or winner.get("username") or str(winner["user_id"])
+
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton("📢 Опубликовать результат в канал", callback_data=f"contest_publish_result_{contest_id}")
+    )
+    keyboard.add(
+        types.InlineKeyboardButton("◀️ Назад к списку", callback_data="contest_back_to_list")
+    )
+
     await callback_query.message.answer(
         f"🏆 Победитель конкурса «{contest['title']}»:\n\n"
         f"Имя: {winner_name}\n"
         f"Username: @{winner.get('username', 'нет')}\n"
         f"Город: {winner.get('city', '—')}\n"
         f"Машина: {winner.get('car_model', '—')}\n"
-        f"User ID: {winner['user_id']}"
+        f"User ID: {winner['user_id']}\n\n"
+        "Победитель уведомлён личным сообщением.",
+        reply_markup=keyboard,
     )
 
-    await publish_winner_to_channel(callback_query.bot, updated_contest, winner)
     await notify_winner(callback_query.bot, winner, updated_contest)
+
+
+async def contest_publish_result(callback_query: types.CallbackQuery) -> None:
+    await callback_query.answer()
+    contest_id = callback_query.data.replace("contest_publish_result_", "")
+    contest = await get_contest(contest_id)
+    if not contest or not contest.get("winner_user_id"):
+        await callback_query.message.answer("Конкурс или победитель не найдены.")
+        return
+
+    from bot.database.contests import get_participant
+    winner = await get_participant(contest_id, contest["winner_user_id"])
+    if not winner:
+        await callback_query.message.answer("Данные победителя не найдены.")
+        return
+
+    result = await publish_winner_to_channel(callback_query.bot, contest, winner)
+    if result:
+        await callback_query.message.answer(f"✅ Результат конкурса «{contest['title']}» опубликован в канале!")
+    else:
+        await callback_query.message.answer("Не удалось опубликовать результат в канал.")
 
 
 # ---------------------------------------------------------------------------
@@ -541,8 +572,13 @@ def register_contest_handlers(dp: Dispatcher) -> None:
         lambda c: c.data == "contest_back_to_list", state="*",
     )
     dp.register_callback_query_handler(
+        contest_publish_result, admin_filter,
+        lambda c: c.data.startswith("contest_publish_result_"), state="*",
+    )
+    dp.register_callback_query_handler(
         contest_publish_to_channel, admin_filter,
-        lambda c: c.data.startswith("contest_publish_"), state="*",
+        lambda c: c.data.startswith("contest_publish_") and not c.data.startswith("contest_publish_result_"),
+        state="*",
     )
     dp.register_callback_query_handler(
         contest_pick_winner_prompt, admin_filter,
