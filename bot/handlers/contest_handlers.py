@@ -65,14 +65,14 @@ async def contests_menu(message: types.Message, state: FSMContext) -> None:
     await state.finish()
     contests = await get_active_contests()
 
-    text = "🎉 *Активные конкурсы:*\n\n"
+    text = "🎉 Активные конкурсы:\n\n"
     if not contests:
         text += "Нет активных конкурсов.\n"
     else:
         for c in contests:
             end_str = _utc_to_msk_str(c["end_time"])
             text += (
-                f"• *{c['title']}*\n"
+                f"• {c['title']}\n"
                 f"  Участников: {c.get('participants_count', 0)} | Приём заявок до: {end_str} МСК\n\n"
             )
 
@@ -86,7 +86,7 @@ async def contests_menu(message: types.Message, state: FSMContext) -> None:
             )
         )
 
-    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard)
 
 
 # ---------------------------------------------------------------------------
@@ -159,13 +159,12 @@ async def _show_contest_confirmation(message: types.Message, state: FSMContext) 
             types.InlineKeyboardButton("❌ Отменить", callback_data="contest_cancel_create"),
         )
         await message.answer(
-            f"*Подтверждение создания конкурса:*\n\n"
+            f"Подтверждение создания конкурса:\n\n"
             f"Название: {data['title']}\n"
             f"Описание: {data['description']}\n"
             f"Приём заявок до: {data['end_time_display']} МСК\n"
             f"Картинка: {photo_info}\n\n"
             "Всё верно?",
-            parse_mode=types.ParseMode.MARKDOWN,
             reply_markup=keyboard,
         )
     await ContestCreation.waiting_for_confirmation.set()
@@ -242,7 +241,7 @@ async def contest_manage(callback_query: types.CallbackQuery) -> None:
     end_str = _utc_to_msk_str(contest["end_time"])
 
     text = (
-        f"🎉 *{contest['title']}*\n\n"
+        f"🎉 {contest['title']}\n\n"
         f"Описание: {contest['description']}\n"
         f"Приём заявок до: {end_str} МСК\n"
         f"Статус: {contest['status']}\n"
@@ -271,9 +270,7 @@ async def contest_manage(callback_query: types.CallbackQuery) -> None:
         types.InlineKeyboardButton("◀️ Назад к списку", callback_data="contest_back_to_list")
     )
 
-    await callback_query.message.edit_text(
-        text, parse_mode=types.ParseMode.MARKDOWN, reply_markup=keyboard
-    )
+    await callback_query.message.edit_text(text, reply_markup=keyboard)
 
 
 async def contest_back_to_list(callback_query: types.CallbackQuery, state: FSMContext) -> None:
