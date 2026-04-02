@@ -18,6 +18,8 @@ from bot.services.notifications import send_broadcast
 # Глобальная переменная для хранения планировщика
 _scheduler = None
 
+_background_tasks: set[asyncio.Task] = set()
+
 def setup_scheduler():
     """
     Инициализация планировщика задач
@@ -140,93 +142,76 @@ async def check_scheduled_broadcasts(bot):
         
         if not scheduled_broadcasts:
             return
-            
-        logging.info(f"Bot instance для отправки рассылок: {bot}")
-        
+
         for broadcast in scheduled_broadcasts:
-            broadcast_id = str(broadcast["_id"])
-            bc_time = broadcast.get('schedule_time', 'н/д')
-            if isinstance(bc_time, datetime):
-                # Конвертируем UTC время рассылки в московское для информативности
-                bc_time_moscow = bc_time.replace(tzinfo=pytz.UTC).astimezone(moscow_tz)
-                bc_time_str = f"{bc_time} UTC / {bc_time_moscow.strftime('%d.%m.%Y %H:%M:%S')} МСК"
-            else:
-                bc_time_str = str(bc_time)
-                
-            logging.info(f"Начинаем обработку рассылки ID:{broadcast_id}, запланированной на {bc_time_str}")
-            
-            # Проверка фильтра на наличие статуса active
+            # Отмечаем, что рассылка в процессе (до запуска фоновой задачи,
+            # чтобы следующая итерация scheduler не подхватила её повторно)
             target_filter = broadcast.get("target_filter", {})
             if isinstance(target_filter, dict) and "status" not in target_filter:
-                logging.info(f"Добавляем статус 'active' в фильтр рассылки ID:{broadcast_id}")
                 target_filter["status"] = "active"
-                # Обновляем фильтр в базе данных
                 await db[BROADCASTS_COLLECTION].update_one(
                     {"_id": broadcast["_id"]},
                     {"$set": {"target_filter": target_filter}}
                 )
-            
-            # Отмечаем, что рассылка в процессе отправки
+
             await db[BROADCASTS_COLLECTION].update_one(
                 {"_id": broadcast["_id"]},
                 {"$set": {"status": "in_progress"}}
             )
-            
-            try:
-                # Определяем оптимальные параметры для рассылки на основе количества пользователей
-                total_users = broadcast.get("total_users", 0)
-                batch_size = 25
-                batch_delay = 3
-                
-                # Для больших рассылок увеличиваем размер пакета и задержку
-                if total_users > 1000:
-                    batch_size = 50
-                    batch_delay = 5
-                elif total_users > 5000:
-                    batch_size = 100
-                    batch_delay = 10
-                
-                # Получаем данные о медиа, если они есть
-                media = broadcast.get("media")
-                media_type = broadcast.get("media_type")
-                
-                if media and media_type:
-                    logging.info(f"Рассылка ID:{broadcast_id} содержит медиа-контент типа: {media_type}")
-                
-                # Отправляем рассылку с поддержкой медиа-контента
-                logging.info(f"Отправляем рассылку ID:{broadcast_id}")
-                stats = await send_broadcast(
-                    bot=bot,
-                    message_text=broadcast["message_text"],
-                    target_filter=target_filter,  # Используем обновленный фильтр
-                    save_to_db=False,
-                    batch_size=batch_size,
-                    batch_delay=batch_delay,
-                    media=media,
-                    media_type=media_type
-                )
-                
-                # Обновляем статус рассылки
-                await db[BROADCASTS_COLLECTION].update_one(
-                    {"_id": broadcast["_id"]},
-                    {"$set": {
-                        "status": "completed", 
-                        "completed_at": datetime.utcnow(),
-                        "sent_count": stats.get("sent", 0),
-                        "failed_count": stats.get("failed", 0)
-                    }}
-                )
-                
-                logging.info(f"Запланированная рассылка ID:{broadcast_id} выполнена. Отправлено: {stats.get('sent', 0)}, ошибок: {stats.get('failed', 0)}")
-                
-            except Exception as e:
-                logging.error(f"Ошибка при отправке запланированной рассылки ID:{broadcast_id}: {e}")
-                
-                # Отмечаем, что произошла ошибка при отправке
-                await db[BROADCASTS_COLLECTION].update_one(
-                    {"_id": broadcast["_id"]},
-                    {"$set": {"status": "error", "error": str(e)}}
-                )
+
+            task = asyncio.create_task(_execute_broadcast(bot, broadcast, target_filter))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
     
     except Exception as e:
-        logging.error(f"Ошибка при проверке запланированных рассылок: {e}") 
+        logging.error(f"Ошибка при проверке запланированных рассылок: {e}")
+
+
+async def _execute_broadcast(bot, broadcast: dict, target_filter: dict) -> None:
+    """Фоновая задача: отправка одной запланированной рассылки."""
+    db = get_db()
+    broadcast_id = str(broadcast["_id"])
+    try:
+        total_users = broadcast.get("total_users", 0)
+        batch_size = 25
+        batch_delay = 3
+
+        if total_users > 5000:
+            batch_size = 100
+            batch_delay = 10
+        elif total_users > 1000:
+            batch_size = 50
+            batch_delay = 5
+
+        media = broadcast.get("media")
+        media_type = broadcast.get("media_type")
+
+        logging.info(f"Фоновая отправка рассылки ID:{broadcast_id}")
+        stats = await send_broadcast(
+            bot=bot,
+            message_text=broadcast["message_text"],
+            target_filter=target_filter,
+            save_to_db=False,
+            batch_size=batch_size,
+            batch_delay=batch_delay,
+            media=media,
+            media_type=media_type,
+        )
+
+        await db[BROADCASTS_COLLECTION].update_one(
+            {"_id": broadcast["_id"]},
+            {"$set": {
+                "status": "completed",
+                "completed_at": datetime.utcnow(),
+                "sent_count": stats.get("sent", 0),
+                "failed_count": stats.get("failed", 0),
+            }},
+        )
+        logging.info(f"Рассылка ID:{broadcast_id} завершена. Отправлено: {stats.get('sent', 0)}, ошибок: {stats.get('failed', 0)}")
+
+    except Exception as e:
+        logging.error(f"Ошибка при отправке рассылки ID:{broadcast_id}: {e}")
+        await db[BROADCASTS_COLLECTION].update_one(
+            {"_id": broadcast["_id"]},
+            {"$set": {"status": "error", "error": str(e)}},
+        )

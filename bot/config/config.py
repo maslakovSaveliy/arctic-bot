@@ -1,13 +1,24 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 # Загрузка переменных окружения из .env файла
 load_dotenv()
 
+
+def _require_env(name: str) -> str:
+    """Возвращает значение env-переменной или завершает процесс с понятной ошибкой."""
+    value = os.getenv(name)
+    if not value:
+        print(f"FATAL: обязательная переменная окружения {name} не задана", file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
 # Telegram API конфигурация
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # @username канала для открытого канала
+TELEGRAM_BOT_TOKEN = _require_env("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = _require_env("CHANNEL_ID")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 ADMIN_USER_IDS = [int(user_id) for user_id in os.getenv("ADMIN_USER_IDS", "").split(",") if user_id]
 
 # MongoDB конфигурация

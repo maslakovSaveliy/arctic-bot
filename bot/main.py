@@ -5,7 +5,6 @@
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, executor
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from datetime import datetime
 
 from bot.config.config import TELEGRAM_BOT_TOKEN, DEBUG
@@ -13,14 +12,14 @@ from bot.handlers import register_all_handlers
 from bot.database import init_db, close_db_connection
 from bot.utils.logging_setup import setup_logging, clean_old_logs
 from bot.utils.scheduler import setup_scheduler, check_scheduled_broadcasts, migrate_old_broadcasts, create_broadcast_check_job
-# Убран импорт clean_old_pending_approvals - функция удалена вместе с join_request_handlers
+from bot.utils.mongo_storage import MongoStorage
 
 # Настройка логирования
 setup_logging(log_level=logging.DEBUG if DEBUG else logging.INFO)
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-storage = MemoryStorage()
+storage = MongoStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Планировщик задач
@@ -45,10 +44,7 @@ async def on_startup(dispatcher):
     # Запускаем миграцию старых запланированных рассылок
     logging.info("Запуск миграции старых запланированных рассылок...")
     await migrate_old_broadcasts()
-    
-    # Первая проверка сразу при запуске
-    await check_scheduled_broadcasts(bot)
-    
+
     # Создаем функцию-обертку для передачи бота
     check_broadcasts_job = create_broadcast_check_job(bot)
     
@@ -100,6 +96,6 @@ async def on_shutdown(dispatcher):
 if __name__ == "__main__":
     try:
         # В aiogram 2.20 используется executor для запуска бота с обработчиками
-        executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown, skip_updates=True)
+        executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
     except Exception as e:
         logging.exception(f"Критическая ошибка: {e}") 

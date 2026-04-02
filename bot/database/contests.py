@@ -29,7 +29,6 @@ async def create_contest(
         "created_at": datetime.utcnow(),
         "created_by": created_by,
         "winner_user_id": None,
-        "channel_message_id": None,
         "participants_count": 0,
         "photo_file_id": photo_file_id,
     }
@@ -106,3 +105,21 @@ async def get_random_participant(contest_id: str) -> Optional[dict]:
     if not participants:
         return None
     return random.choice(participants)
+
+
+async def delete_contest(contest_id: str) -> bool:
+    """Удаление конкурса из коллекции."""
+    db = get_db()
+    result = await db[CONTESTS_COLLECTION].delete_one({"contest_id": contest_id})
+    if result.deleted_count > 0:
+        logging.info(f"Конкурс удалён: {contest_id}")
+        return True
+    return False
+
+
+async def delete_contest_participants(contest_id: str) -> int:
+    """Удаление всех участников конкурса. Возвращает количество удалённых."""
+    db = get_db()
+    result = await db[CONTEST_PARTICIPANTS_COLLECTION].delete_many({"contest_id": contest_id})
+    logging.info(f"Удалено {result.deleted_count} участников конкурса {contest_id}")
+    return result.deleted_count

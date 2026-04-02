@@ -31,8 +31,12 @@ async def errors_handler(update, exception):
         return True
         
     if isinstance(exception, BotBlocked):
-        # Пользователь заблокировал бота
-        logging.warning(f'Бот заблокирован пользователем: {update.message.from_user.id}')
+        user_id = "unknown"
+        if update and update.message and update.message.from_user:
+            user_id = update.message.from_user.id
+        elif update and update.callback_query and update.callback_query.from_user:
+            user_id = update.callback_query.from_user.id
+        logging.warning(f'Бот заблокирован пользователем: {user_id}')
         return True
         
     if isinstance(exception, CantTalkWithBots):

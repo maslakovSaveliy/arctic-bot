@@ -228,4 +228,27 @@ async def update_user_status(user_id, status, reason=None):
     )
     
     logging.info(f"Статус пользователя {user_id} изменен на {status}" + (f" (Причина: {reason})" if reason else ""))
-    return result.modified_count > 0 
+    return result.modified_count > 0
+
+
+async def count_users(status: str | None = None) -> int:
+    """Подсчёт количества пользователей (опционально по статусу) без загрузки в RAM."""
+    db = get_db()
+    query: dict = {}
+    if status:
+        query["status"] = status
+    return await db[USERS_COLLECTION].count_documents(query)
+
+
+async def get_city_stats(status: str = "active") -> list[dict]:
+    """
+    Агрегация количества пользователей по городам.
+    Возвращает список {"_id": "Москва", "count": 42}, отсортированный по убыванию.
+    """
+    db = get_db()
+    pipeline = [
+        {"$match": {"status": status}},
+        {"$group": {"_id": {"$ifNull": ["$city", "Не указан"]}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    return await db[USERS_COLLECTION].aggregate(pipeline).to_list(length=None) 

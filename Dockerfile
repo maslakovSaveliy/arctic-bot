@@ -18,7 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код приложения
 COPY bot/ ./bot/
-COPY .env .
 
 # Создаем пользователя для безопасности
 RUN useradd --create-home --shell /bin/bash botuser

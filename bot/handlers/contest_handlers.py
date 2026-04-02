@@ -16,12 +16,15 @@ from bot.config.config import ADMIN_USER_IDS
 from bot.database.contests import (
     add_participant,
     create_contest,
+    delete_contest,
+    delete_contest_participants,
     get_active_contests,
     get_contest,
     get_contest_participants,
 )
 from bot.database.users import get_user, update_user
 from bot.services.contests import (
+    delete_contest_channel_message,
     notify_winner,
     pick_winner,
     publish_contest_to_channel,
@@ -267,6 +270,9 @@ async def contest_manage(callback_query: types.CallbackQuery) -> None:
         )
 
     keyboard.add(
+        types.InlineKeyboardButton("🗑 Удалить конкурс", callback_data=f"contest_delete_{contest_id}")
+    )
+    keyboard.add(
         types.InlineKeyboardButton("◀️ Назад к списку", callback_data="contest_back_to_list")
     )
 
@@ -368,6 +374,61 @@ async def contest_publish_result(callback_query: types.CallbackQuery) -> None:
         await callback_query.message.answer(f"✅ Результат конкурса «{contest['title']}» опубликован в канале!")
     else:
         await callback_query.message.answer("Не удалось опубликовать результат в канал.")
+
+
+# ---------------------------------------------------------------------------
+# Админ: удаление конкурса
+# ---------------------------------------------------------------------------
+
+async def contest_delete_prompt(callback_query: types.CallbackQuery) -> None:
+    """Показывает диалог подтверждения удаления конкурса."""
+    await callback_query.answer()
+    contest_id = callback_query.data.replace("contest_delete_", "")
+    contest = await get_contest(contest_id)
+    if not contest:
+        await callback_query.message.answer("Конкурс не найден.")
+        return
+
+    participants = await get_contest_participants(contest_id)
+    channel_info = ""
+    if contest.get("channel_message_id"):
+        channel_info = "\nПост конкурса в канале будет удалён."
+
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton("✅ Да, удалить", callback_data=f"contest_delete_confirm_{contest_id}"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data=f"contest_manage_{contest_id}"),
+    )
+    await callback_query.message.edit_text(
+        f"Вы уверены, что хотите удалить конкурс «{contest['title']}»?\n"
+        f"Участников: {len(participants)}{channel_info}\n\n"
+        "Это действие необратимо.",
+        reply_markup=keyboard,
+    )
+
+
+async def contest_delete_confirm(callback_query: types.CallbackQuery, state: FSMContext) -> None:
+    """Выполняет удаление конкурса, его участников и поста в канале."""
+    await callback_query.answer()
+    contest_id = callback_query.data.replace("contest_delete_confirm_", "")
+    contest = await get_contest(contest_id)
+    if not contest:
+        await callback_query.message.answer("Конкурс не найден.")
+        return
+
+    title = contest["title"]
+
+    await delete_contest_channel_message(callback_query.bot, contest)
+    deleted_participants = await delete_contest_participants(contest_id)
+    await delete_contest(contest_id)
+
+    logging.info(f"Конкурс «{title}» ({contest_id}) удалён админом {callback_query.from_user.id}")
+
+    await callback_query.message.edit_text(
+        f"🗑 Конкурс «{title}» удалён.\n"
+        f"Удалено участников: {deleted_participants}",
+    )
+    await contests_menu(callback_query.message, state)
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +618,17 @@ def register_contest_handlers(dp: Dispatcher) -> None:
         contest_cancel_create, admin_filter,
         lambda c: c.data == "contest_cancel_create",
         state=ContestCreation.waiting_for_confirmation,
+    )
+
+    # --- Админ: удаление конкурса ---
+    dp.register_callback_query_handler(
+        contest_delete_confirm, admin_filter,
+        lambda c: c.data.startswith("contest_delete_confirm_"), state="*",
+    )
+    dp.register_callback_query_handler(
+        contest_delete_prompt, admin_filter,
+        lambda c: c.data.startswith("contest_delete_") and not c.data.startswith("contest_delete_confirm_"),
+        state="*",
     )
 
     # --- Админ: управление конкурсом ---

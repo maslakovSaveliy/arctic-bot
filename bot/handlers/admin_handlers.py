@@ -11,11 +11,12 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.dispatcher.filters import Text, IDFilter
 import pytz
 
-from bot.config.config import ADMIN_USER_IDS
+from bot.config.config import ADMIN_USER_IDS, CHANNEL_ID
 from bot.database import (
     get_all_users, 
     get_users_by_filter
 )
+from bot.database.users import count_users, get_city_stats
 from bot.services.notifications import send_broadcast, schedule_broadcast
 
 class BroadcastStates(StatesGroup):
@@ -53,45 +54,32 @@ async def admin_start(message: types.Message):
 
 async def show_statistics(message: types.Message):
     """
-    Показывает статистику по пользователям и городам
+    Показывает статистику по пользователям и городам (через aggregation pipeline).
     """
-    from bot.config.config import CHANNEL_ID
-    
-    # Получаем всех пользователей
-    all_users = await get_all_users()
-    active_users = await get_all_users(status="active")
-    
-    # Получаем количество подписчиков канала
+
+    total_count = await count_users()
+    active_count = await count_users(status="active")
+
     try:
         chat_member_count = await message.bot.get_chat_member_count(CHANNEL_ID)
     except Exception as e:
         logging.error(f"Ошибка при получении количества подписчиков канала: {e}")
         chat_member_count = "Недоступно"
-    
-    # Группируем пользователей по городам
-    cities = {}
-    for user in active_users:
-        city = user.get("city", "Не указан")
-        if city not in cities:
-            cities[city] = 0
-        cities[city] += 1
-    
-    # Сортируем города по количеству пользователей
-    sorted_cities = sorted(cities.items(), key=lambda x: x[1], reverse=True)
-    
-    # Формируем текст сообщения
+
+    city_stats = await get_city_stats(status="active")
+
     text = "📊 *Статистика Arctic Trucks*\n\n"
     text += f"👥 *Подписчики канала:* {chat_member_count}\n"
-    text += f"🤖 *Пользователи бота:* {len(all_users)}\n"
-    text += f"✅ *Активные пользователи:* {len(active_users)}\n\n"
-    
+    text += f"🤖 *Пользователи бота:* {total_count}\n"
+    text += f"✅ *Активные пользователи:* {active_count}\n\n"
+
     text += "*📍 Статистика по городам:*\n"
-    for city, count in sorted_cities[:10]:  # Показываем топ-10 городов
-        text += f"• {city}: {count} чел.\n"
-    
-    if len(sorted_cities) > 10:
-        text += f"\n... и еще {len(sorted_cities) - 10} городов"
-    
+    for item in city_stats[:10]:
+        text += f"• {item['_id']}: {item['count']} чел.\n"
+
+    if len(city_stats) > 10:
+        text += f"\n... и еще {len(city_stats) - 10} городов"
+
     await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
 
 async def create_broadcast_cmd(message: types.Message):

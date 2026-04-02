@@ -13,8 +13,6 @@ services:
     volumes:
       - mongodb_data:/data/db
       - ./mongo-init:/docker-entrypoint-initdb.d
-    ports:
-      - "27017:27017"
     networks:
       - arctic-bot-network
     healthcheck:
@@ -35,7 +33,9 @@ services:
       - MONGODB_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-password}@mongodb:27017/${MONGODB_DB_NAME:-telegram_bot}?authSource=admin
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - CHANNEL_ID=${CHANNEL_ID}
+      - CHANNEL_USERNAME=${CHANNEL_USERNAME}
       - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-telegram_bot}
       - DEBUG=${DEBUG:-False}
       - DEFAULT_WELCOME_MESSAGE=${DEFAULT_WELCOME_MESSAGE}
       - SMTP_SERVER=${SMTP_SERVER}
@@ -49,7 +49,7 @@ services:
     networks:
       - arctic-bot-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD", "python", "-m", "bot.healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

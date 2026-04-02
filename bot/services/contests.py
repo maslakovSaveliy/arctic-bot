@@ -13,6 +13,7 @@ from aiogram import Bot, types
 from bot.config.config import CHANNEL_ID, CHANNEL_USERNAME, MAX_USER_ID
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
+
 from bot.database.contests import (
     get_contest,
     get_participant,
@@ -157,6 +158,20 @@ async def publish_winner_to_channel(
         return True
     except Exception as exc:
         logging.error(f"Ошибка публикации результата конкурса: {exc}")
+        return False
+
+
+async def delete_contest_channel_message(bot: Bot, contest: dict) -> bool:
+    """Удаляет пост конкурса из канала, если он был опубликован."""
+    message_id = contest.get("channel_message_id")
+    if not message_id:
+        return True
+    try:
+        await bot.delete_message(chat_id=CHANNEL_ID, message_id=message_id)
+        logging.info(f"Пост конкурса {contest['contest_id']} удалён из канала (msg_id={message_id})")
+        return True
+    except Exception as exc:
+        logging.error(f"Не удалось удалить пост конкурса из канала: {exc}")
         return False
 
 

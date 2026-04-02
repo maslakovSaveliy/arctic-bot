@@ -2,6 +2,7 @@
 Обработчики команд для обычных пользователей бота
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from aiogram import Dispatcher, types
@@ -352,7 +353,8 @@ async def _process_consultation_submission(
         user_name = f"{user_name} {user.last_name}".strip()
 
     try:
-        return send_consultation_email(
+        return await asyncio.to_thread(
+            send_consultation_email,
             phone_number=phone,
             user_name=user_name or None,
             city=city,
@@ -383,12 +385,12 @@ async def contact_handler(message: types.Message):
         
         # Сохраняем номер телефона в базе
         await update_user(user_id, {"phone": phone})
-        # Отправляем email (синхронная функция)
         try:
-            result = send_consultation_email(
-                phone,
-                user_name,
-                city,
+            result = await asyncio.to_thread(
+                send_consultation_email,
+                phone_number=phone,
+                user_name=user_name,
+                city=city,
                 contact_method="Контакт отправлен через Telegram",
             )
             if result:
