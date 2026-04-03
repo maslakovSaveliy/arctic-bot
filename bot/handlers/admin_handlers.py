@@ -56,31 +56,34 @@ async def show_statistics(message: types.Message):
     """
     Показывает статистику по пользователям и городам (через aggregation pipeline).
     """
-
-    total_count = await count_users()
-    active_count = await count_users(status="active")
-
     try:
-        chat_member_count = await message.bot.get_chat_member_count(CHANNEL_ID)
+        total_count = await count_users()
+        active_count = await count_users(status="active")
+
+        try:
+            chat_member_count = await message.bot.get_chat_member_count(CHANNEL_ID)
+        except Exception as e:
+            logging.error(f"Ошибка при получении количества подписчиков канала: {e}")
+            chat_member_count = "Недоступно"
+
+        city_stats = await get_city_stats(status="active")
+
+        text = "📊 <b>Статистика Arctic Trucks</b>\n\n"
+        text += f"👥 <b>Подписчики канала:</b> {chat_member_count}\n"
+        text += f"🤖 <b>Пользователи бота:</b> {total_count}\n"
+        text += f"✅ <b>Активные пользователи:</b> {active_count}\n\n"
+
+        text += "<b>📍 Статистика по городам:</b>\n"
+        for item in city_stats[:10]:
+            text += f"• {item['_id']}: {item['count']} чел.\n"
+
+        if len(city_stats) > 10:
+            text += f"\n... и еще {len(city_stats) - 10} городов"
+
+        await message.answer(text, parse_mode=types.ParseMode.HTML)
     except Exception as e:
-        logging.error(f"Ошибка при получении количества подписчиков канала: {e}")
-        chat_member_count = "Недоступно"
-
-    city_stats = await get_city_stats(status="active")
-
-    text = "📊 *Статистика Arctic Trucks*\n\n"
-    text += f"👥 *Подписчики канала:* {chat_member_count}\n"
-    text += f"🤖 *Пользователи бота:* {total_count}\n"
-    text += f"✅ *Активные пользователи:* {active_count}\n\n"
-
-    text += "*📍 Статистика по городам:*\n"
-    for item in city_stats[:10]:
-        text += f"• {item['_id']}: {item['count']} чел.\n"
-
-    if len(city_stats) > 10:
-        text += f"\n... и еще {len(city_stats) - 10} городов"
-
-    await message.answer(text, parse_mode=types.ParseMode.MARKDOWN)
+        logging.exception(f"Ошибка в show_statistics: {e}")
+        await message.answer("Произошла ошибка при получении статистики. Проверьте логи.")
 
 async def create_broadcast_cmd(message: types.Message):
     """
