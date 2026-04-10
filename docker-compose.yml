@@ -54,8 +54,6 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - SMTP_TO_EMAIL=${SMTP_TO_EMAIL}
       - SMTP_SUBJECT=${SMTP_SUBJECT}
-    extra_hosts:
-      - "api.telegram.org:149.154.167.220"
     volumes:
       - ./logs:/app/logs:rw
     networks:
