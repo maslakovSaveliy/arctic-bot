@@ -6,6 +6,11 @@ services:
     image: mongo:6.0
     container_name: arctic-bot-mongodb
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password}
@@ -26,6 +31,11 @@ services:
     build: .
     container_name: arctic-bot
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -44,6 +54,8 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - SMTP_TO_EMAIL=${SMTP_TO_EMAIL}
       - SMTP_SUBJECT=${SMTP_SUBJECT}
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
     volumes:
       - ./logs:/app/logs:rw
     networks:
